@@ -205,3 +205,14 @@ Standardmaessig werden Prozessbenutzer im Klartext gespeichert, damit eine Ursac
 ### CPU-Prozent verstehen
 
 `CpuPercent` ist die Gesamt-CPU des Servers. `ProcessCpuPercent` wird aus CPU-Sekunden-Delta geteilt durch Messdauer berechnet. Ein einzelner mehrthreadiger Prozess kann auf Mehrkernsystemen rechnerisch ueber 100 erreichen; der Wert ist damit kernbezogen. Zur Plausibilisierung werden zusaetzlich `TopProcessCpuPercentSum` und Kategorie-Summen ausgegeben.
+
+### 8h-Lauf aus der GUI starten
+
+Im Tab **Ausfuehren** koennen jetzt auch die wichtigsten Langlaufparameter gesetzt werden:
+
+- Sammeldauer Minuten, z. B. `480` fuer 8 Stunden.
+- Intervall Sekunden, z. B. `300` fuer eine Messrunde alle 5 Minuten.
+- CPU Delta Sekunden, Top Prozesse, Alert Top Prozesse, CPU Warn-/Kritisch-Schwelle und MaxParallel.
+- Optional Eventlog-Kontext bei Critical und Benutzer-Anonymisierung.
+
+Die Schaltflaeche **8h Preset** setzt empfohlene Startwerte fuer einen 8-Stunden-Lauf mit geringer Zusatzlast.

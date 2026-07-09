@@ -213,6 +213,11 @@ function Get-RemoteSamplerScriptBlock {
             $delta = [Math]::Max($endCpu - $startCpu, 0)
             $cpuPct = [Math]::Round(($delta / $elapsedSeconds) * 100, 2)
             $category = Get-ProcessCategory $process.ProcessName
+            $startTimeText = ''
+            try {
+                if ($process.StartTime) { $startTimeText = $process.StartTime.ToString('s') }
+            }
+            catch { $startTimeText = '' }
             [pscustomobject]@{
                 ProcessId = [int]$process.Id
                 ProcessName = [string]$process.ProcessName
@@ -221,7 +226,7 @@ function Get-RemoteSamplerScriptBlock {
                 CpuSecondsDelta = [Math]::Round($delta, 3)
                 WorkingSetMb = [Math]::Round($process.WorkingSet64 / 1MB, 2)
                 PrivateMemoryMb = if ($null -ne $process.PrivateMemorySize64) { [Math]::Round($process.PrivateMemorySize64 / 1MB, 2) } else { '' }
-                StartTime = try { if ($process.StartTime) { $process.StartTime.ToString('s') } else { '' } } catch { '' }
+                StartTime = $startTimeText
                 Category = $category
                 IsMonitoringRelated = ($category -eq 'Monitoring')
             }

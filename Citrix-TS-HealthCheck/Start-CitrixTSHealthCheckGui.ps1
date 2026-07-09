@@ -155,6 +155,16 @@ function Load-GuiData {
     $winRmTimeoutBox.Value = [decimal]$settings.WinRMTimeoutSeconds
     $delimiterBox.Text = [string]$settings.OutputDelimiter
     $includeDisconnectedBox.Checked = [bool]$settings.IncludeDisconnectedSessions
+    if ($manualDurationBox) { $manualDurationBox.Value = [decimal]$settings.DurationMinutes }
+    if ($manualIntervalBox) { $manualIntervalBox.Value = [decimal]$settings.IntervalSeconds }
+    if ($runCpuSampleBox) { $runCpuSampleBox.Value = [decimal]$settings.CpuSampleSeconds }
+    if ($runTopProcessBox) { $runTopProcessBox.Value = [decimal]$settings.TopProcessCount }
+    if ($runAlertTopProcessBox) { $runAlertTopProcessBox.Value = [decimal]$settings.AlertTopProcessCount }
+    if ($runWarningBox) { $runWarningBox.Value = [decimal]$settings.CpuWarningThreshold }
+    if ($runCriticalBox) { $runCriticalBox.Value = [decimal]$settings.CpuCriticalThreshold }
+    if ($runMaxParallelBox) { $runMaxParallelBox.Value = [decimal]$settings.MaxParallel }
+    if ($runIncludeEventsBox) { $runIncludeEventsBox.Checked = [bool]$settings.IncludeEventLogContext }
+    if ($runAnonymizeBox) { $runAnonymizeBox.Checked = [bool]$settings.AnonymizeUsers }
     Add-StatusLine 'Konfiguration geladen.'
 }
 
@@ -193,8 +203,17 @@ function Start-HealthCheckRun {
         '-ConfigPath', ('"{0}"' -f (Join-ProjectPath -ChildPath @('config'))),
         '-OutputPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('output'))),
         '-DurationMinutes', ([int]$manualDurationBox.Value),
-        '-IntervalSeconds', ([int]$manualIntervalBox.Value)
-    ) -join ' '
+        '-IntervalSeconds', ([int]$manualIntervalBox.Value),
+        '-CpuSampleSeconds', ([int]$runCpuSampleBox.Value),
+        '-TopProcessCount', ([int]$runTopProcessBox.Value),
+        '-AlertTopProcessCount', ([int]$runAlertTopProcessBox.Value),
+        '-CpuWarningThreshold', ([double]$runWarningBox.Value),
+        '-CpuCriticalThreshold', ([double]$runCriticalBox.Value),
+        '-MaxParallel', ([int]$runMaxParallelBox.Value)
+    )
+    if ($runIncludeEventsBox.Checked) { $arguments += '-IncludeEventLogContext' }
+    if ($runAnonymizeBox.Checked) { $arguments += '-AnonymizeUsers' }
+    $arguments = $arguments -join ' '
 
     $script:HealthCheckProcess = Start-Process -FilePath 'powershell.exe' `
         -ArgumentList $arguments `
@@ -351,20 +370,82 @@ $manualIntervalBox.Value = 60
 $manualIntervalBox.Location = New-Object System.Drawing.Point(205, 117)
 $runTab.Controls.Add($manualIntervalBox)
 
+
+$runTab.Controls.Add((New-Label -Text 'CPU Delta Sekunden' -X 430 -Y 80 -Width 150))
+$runCpuSampleBox = New-Object System.Windows.Forms.NumericUpDown
+$runCpuSampleBox.Minimum = 1
+$runCpuSampleBox.Maximum = 300
+$runCpuSampleBox.Value = 5
+$runCpuSampleBox.Location = New-Object System.Drawing.Point(620, 77)
+$runTab.Controls.Add($runCpuSampleBox)
+
+$runTab.Controls.Add((New-Label -Text 'Top Prozesse' -X 430 -Y 110 -Width 150))
+$runTopProcessBox = New-Object System.Windows.Forms.NumericUpDown
+$runTopProcessBox.Minimum = 1
+$runTopProcessBox.Maximum = 100
+$runTopProcessBox.Value = 10
+$runTopProcessBox.Location = New-Object System.Drawing.Point(620, 107)
+$runTab.Controls.Add($runTopProcessBox)
+
+$runTab.Controls.Add((New-Label -Text 'Alert Top Prozesse' -X 430 -Y 140 -Width 150))
+$runAlertTopProcessBox = New-Object System.Windows.Forms.NumericUpDown
+$runAlertTopProcessBox.Minimum = 1
+$runAlertTopProcessBox.Maximum = 200
+$runAlertTopProcessBox.Value = 25
+$runAlertTopProcessBox.Location = New-Object System.Drawing.Point(620, 137)
+$runTab.Controls.Add($runAlertTopProcessBox)
+
+$runTab.Controls.Add((New-Label -Text 'CPU Warn/Kritisch %' -X 430 -Y 170 -Width 150))
+$runWarningBox = New-Object System.Windows.Forms.NumericUpDown
+$runWarningBox.Minimum = 1
+$runWarningBox.Maximum = 100
+$runWarningBox.Value = 70
+$runWarningBox.Location = New-Object System.Drawing.Point(620, 167)
+$runTab.Controls.Add($runWarningBox)
+$runCriticalBox = New-Object System.Windows.Forms.NumericUpDown
+$runCriticalBox.Minimum = 1
+$runCriticalBox.Maximum = 100
+$runCriticalBox.Value = 90
+$runCriticalBox.Location = New-Object System.Drawing.Point(735, 167)
+$runTab.Controls.Add($runCriticalBox)
+
+$runTab.Controls.Add((New-Label -Text 'MaxParallel' -X 430 -Y 200 -Width 150))
+$runMaxParallelBox = New-Object System.Windows.Forms.NumericUpDown
+$runMaxParallelBox.Minimum = 1
+$runMaxParallelBox.Maximum = 64
+$runMaxParallelBox.Value = 4
+$runMaxParallelBox.Location = New-Object System.Drawing.Point(620, 197)
+$runTab.Controls.Add($runMaxParallelBox)
+
+$runIncludeEventsBox = New-Object System.Windows.Forms.CheckBox
+$runIncludeEventsBox.Text = 'Eventlog-Kontext bei Critical'
+$runIncludeEventsBox.Location = New-Object System.Drawing.Point(430, 230)
+$runIncludeEventsBox.Size = New-Object System.Drawing.Size(230, 24)
+$runTab.Controls.Add($runIncludeEventsBox)
+
+$runAnonymizeBox = New-Object System.Windows.Forms.CheckBox
+$runAnonymizeBox.Text = 'Benutzer anonymisieren'
+$runAnonymizeBox.Location = New-Object System.Drawing.Point(665, 230)
+$runAnonymizeBox.Size = New-Object System.Drawing.Size(190, 24)
+$runTab.Controls.Add($runAnonymizeBox)
+
+$eightHourPresetButton = New-Button -Text '8h Preset' -X 205 -Y 165 -Width 100 -Height 34
+$runTab.Controls.Add($eightHourPresetButton)
+
 $runButton = New-Button -Text 'HealthCheck starten' -X 15 -Y 165 -Width 170 -Height 34
 $runTab.Controls.Add($runButton)
 
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(205, 169)
-$progressBar.Size = New-Object System.Drawing.Size(650, 24)
+$progressBar.Location = New-Object System.Drawing.Point(15, 255)
+$progressBar.Size = New-Object System.Drawing.Size(840, 24)
 $runTab.Controls.Add($progressBar)
 
 $statusBox = New-Object System.Windows.Forms.TextBox
 $statusBox.Multiline = $true
 $statusBox.ScrollBars = 'Vertical'
 $statusBox.ReadOnly = $true
-$statusBox.Location = New-Object System.Drawing.Point(15, 220)
-$statusBox.Size = New-Object System.Drawing.Size(840, 325)
+$statusBox.Location = New-Object System.Drawing.Point(15, 290)
+$statusBox.Size = New-Object System.Drawing.Size(840, 255)
 $runTab.Controls.Add($statusBox)
 
 $openSummaryButton = New-Button -Text 'Letzte Summary' -X 25 -Y 35 -Width 150
@@ -458,6 +539,17 @@ $saveButton.Add_Click({
 $reloadButton.Add_Click({
     try { Load-GuiData }
     catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Laden fehlgeschlagen', 'OK', 'Error') | Out-Null }
+})
+$eightHourPresetButton.Add_Click({
+    $manualDurationBox.Value = 480
+    $manualIntervalBox.Value = 300
+    $runCpuSampleBox.Value = 5
+    $runTopProcessBox.Value = 10
+    $runAlertTopProcessBox.Value = 25
+    $runWarningBox.Value = 70
+    $runCriticalBox.Value = 90
+    $runMaxParallelBox.Value = 4
+    Add-StatusLine '8h Preset gesetzt.'
 })
 $runButton.Add_Click({
     try { Start-HealthCheckRun }
