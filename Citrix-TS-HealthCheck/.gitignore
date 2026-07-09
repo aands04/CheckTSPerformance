@@ -1,0 +1,6 @@
+output/raw/*.csv
+output/logs/*.log
+output/summary/*.csv
+!output/raw/.gitkeep
+!output/logs/.gitkeep
+!output/summary/.gitkeep

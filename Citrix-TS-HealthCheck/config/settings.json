@@ -1,0 +1,7 @@
+{
+  "CpuSampleSeconds": 5,
+  "TopProcessCount": 10,
+  "WinRMTimeoutSeconds": 5,
+  "OutputDelimiter": ";",
+  "IncludeDisconnectedSessions": true
+}

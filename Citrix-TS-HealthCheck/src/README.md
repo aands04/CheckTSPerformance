@@ -1,0 +1,1 @@
+Dieser Ordner ist fuer optionale Erweiterungen reserviert, z. B. ausgelagerte Hilfsfunktionen oder Testscripte. Die erste lauffaehige Version ist bewusst als einzelnes PowerShell-5.1-kompatibles Script `Invoke-CitrixTSHealthCheck.ps1` umgesetzt, damit sie ohne Modulinstallation direkt per Scheduled Task ausgefuehrt werden kann.
