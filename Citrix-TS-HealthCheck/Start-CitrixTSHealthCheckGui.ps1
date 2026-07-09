@@ -8,7 +8,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ProjectRoot = $PSScriptRoot
+    [string]$ProjectRoot
 )
 
 Set-StrictMode -Version 2.0
@@ -21,11 +21,33 @@ Add-Type -AssemblyName System.Drawing
 $script:HealthCheckProcess = $null
 $script:StdOutFile = $null
 $script:StdErrFile = $null
+$script:InvocationPath = $MyInvocation.MyCommand.Path
+
+function Resolve-ProjectRoot {
+    param([string]$ConfiguredProjectRoot)
+
+    if (-not [string]::IsNullOrWhiteSpace($ConfiguredProjectRoot)) {
+        return (Resolve-Path -LiteralPath $ConfiguredProjectRoot).ProviderPath
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        return $PSScriptRoot
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($script:InvocationPath)) {
+        return (Split-Path -Parent $script:InvocationPath)
+    }
+
+    return (Get-Location).ProviderPath
+}
+
+$ProjectRoot = Resolve-ProjectRoot -ConfiguredProjectRoot $ProjectRoot
 
 function Join-ProjectPath {
     param([Parameter(Mandatory=$true)][string[]]$ChildPath)
     $path = $ProjectRoot
-    foreach ($child in $ChildPath) { $path = Join-Path $path $child }
+    if ([string]::IsNullOrWhiteSpace($path)) { throw 'ProjectRoot ist leer. Starten Sie die GUI aus dem Projektverzeichnis oder uebergeben Sie -ProjectRoot.' }
+    foreach ($child in $ChildPath) { $path = Join-Path -Path $path -ChildPath $child }
     return $path
 }
 
@@ -49,7 +71,15 @@ function New-Button {
 
 function Read-SettingsFile {
     $settingsPath = Join-ProjectPath -ChildPath @('config','settings.json')
-    if (-not (Test-Path -LiteralPath $settingsPath)) { throw "Einstellungen nicht gefunden: $settingsPath" }
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        return [pscustomobject]@{
+            CpuSampleSeconds = 5
+            TopProcessCount = 10
+            WinRMTimeoutSeconds = 5
+            OutputDelimiter = ';'
+            IncludeDisconnectedSessions = $true
+        }
+    }
     return Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
@@ -61,6 +91,8 @@ function Save-SettingsFile {
         [string]$OutputDelimiter,
         [bool]$IncludeDisconnectedSessions
     )
+    $configFolder = Join-ProjectPath -ChildPath @('config')
+    if (-not (Test-Path -LiteralPath $configFolder)) { New-Item -ItemType Directory -Path $configFolder -Force | Out-Null }
     $settingsPath = Join-ProjectPath -ChildPath @('config','settings.json')
     $settings = [ordered]@{
         CpuSampleSeconds = $CpuSampleSeconds
@@ -106,6 +138,8 @@ function Load-GuiData {
 }
 
 function Save-GuiData {
+    $configFolder = Join-ProjectPath -ChildPath @('config')
+    if (-not (Test-Path -LiteralPath $configFolder)) { New-Item -ItemType Directory -Path $configFolder -Force | Out-Null }
     $serversPath = Join-ProjectPath -ChildPath @('config','servers.txt')
     $serversBox.Lines | Set-Content -LiteralPath $serversPath -Encoding UTF8
     Save-SettingsFile -CpuSampleSeconds ([int]$cpuSampleBox.Value) `

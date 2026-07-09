@@ -84,6 +84,12 @@ Startbefehl:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-CitrixTSHealthCheckGui.ps1
 ```
 
+Falls die GUI ueber eine Verknuepfung, ISE oder ein anderes Startverzeichnis geoeffnet wird, kann der Projektpfad explizit angegeben werden:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Scripts\Citrix-TS-HealthCheck\Start-CitrixTSHealthCheckGui.ps1 -ProjectRoot C:\Scripts\Citrix-TS-HealthCheck
+```
+
 ## Scheduled Task Beispiel
 
 ```powershell
