@@ -128,4 +128,4 @@ Import-Csv .\output\summary\summary-20260709-120000.csv -Delimiter ';' |
 
 ## Hinweise zur Messlogik
 
-Die Prozess-CPU wird als Delta gemessen: Das Script liest `Get-Process` zu Beginn, wartet standardmaessig 5 Sekunden und liest die Prozesse erneut. Aus der Differenz der CPU-Sekunden je Prozess und der realen Messdauer wird `ProcessCpuPercent` berechnet. Dadurch werden aktuell CPU-lastige Prozesse sichtbar und nicht nur Prozesse mit hoher historisch kumulierter CPU-Zeit.
+Die Gesamt-CPU wird ueber die CIM-Klasse `Win32_PerfFormattedData_PerfOS_Processor` gelesen, damit keine lokalisierten Performance-Counter-Pfade wie `\Processor(_Total)\% Processor Time` benoetigt werden. Die Prozess-CPU wird als Delta gemessen: Das Script liest `Get-Process` zu Beginn, wartet standardmaessig 5 Sekunden und liest die Prozesse erneut. Aus der Differenz der CPU-Sekunden je Prozess und der realen Messdauer wird `ProcessCpuPercent` berechnet. Dadurch werden aktuell CPU-lastige Prozesse sichtbar und nicht nur Prozesse mit hoher historisch kumulierter CPU-Zeit.

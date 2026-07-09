@@ -99,11 +99,19 @@ function Invoke-RemoteHealthSample {
             }
         }
 
+        function Get-TotalCpuPercent {
+            $processor = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
+            if ($processor -and $null -ne $processor.PercentProcessorTime) {
+                return [double]$processor.PercentProcessorTime
+            }
+            return 0
+        }
+
         $sampleStart = Get-Date
-        $cpuStart = Get-Counter '\Processor(_Total)\% Processor Time'
+        $cpuStartPercent = Get-TotalCpuPercent
         $processStart = Get-Process | Select-Object Id, ProcessName, CPU
         Start-Sleep -Seconds $CpuSampleSeconds
-        $cpuEnd = Get-Counter '\Processor(_Total)\% Processor Time'
+        $cpuEndPercent = Get-TotalCpuPercent
         $processEnd = Get-Process | Select-Object Id, ProcessName, CPU, SessionId, WorkingSet64
         $sampleEnd = Get-Date
         $elapsedSeconds = [Math]::Max(($sampleEnd - $sampleStart).TotalSeconds, 1)
@@ -113,7 +121,7 @@ function Invoke-RemoteHealthSample {
         $freeMemoryMb = [Math]::Round($os.FreePhysicalMemory / 1024, 2)
         $usedMemoryMb = [Math]::Round($totalMemoryMb - $freeMemoryMb, 2)
         $memoryPercent = if ($totalMemoryMb -gt 0) { [Math]::Round(($usedMemoryMb / $totalMemoryMb) * 100, 2) } else { 0 }
-        $cpuPercent = [Math]::Round($cpuEnd.CounterSamples.CookedValue, 2)
+        $cpuPercent = [Math]::Round((($cpuStartPercent + $cpuEndPercent) / 2), 2)
 
         $sessions = @()
         $quserOutput = & quser.exe 2>$null

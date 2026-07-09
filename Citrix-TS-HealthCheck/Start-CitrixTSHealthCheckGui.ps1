@@ -193,6 +193,7 @@ function Complete-HealthCheckRun {
     $progressBar.Value = 0
     $runButton.Enabled = $true
 
+    $script:HealthCheckProcess.Refresh()
     $exitCode = $script:HealthCheckProcess.ExitCode
     Add-StatusLine "HealthCheck beendet. ExitCode: $exitCode"
 
