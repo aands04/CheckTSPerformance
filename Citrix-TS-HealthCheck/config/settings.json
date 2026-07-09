@@ -1,7 +1,15 @@
 {
+  "DurationMinutes": 480,
+  "IntervalSeconds": 300,
   "CpuSampleSeconds": 5,
   "TopProcessCount": 10,
-  "WinRMTimeoutSeconds": 5,
+  "AlertTopProcessCount": 25,
+  "CpuWarningThreshold": 70,
+  "CpuCriticalThreshold": 90,
+  "MaxParallel": 4,
+  "IncludeEventLogContext": false,
+  "AnonymizeUsers": false,
   "OutputDelimiter": ";",
+  "WinRMTimeoutSeconds": 5,
   "IncludeDisconnectedSessions": true
 }

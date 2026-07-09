@@ -73,10 +73,18 @@ function Read-SettingsFile {
     $settingsPath = Join-ProjectPath -ChildPath @('config','settings.json')
     if (-not (Test-Path -LiteralPath $settingsPath)) {
         return [pscustomobject]@{
+            DurationMinutes = 480
+            IntervalSeconds = 300
             CpuSampleSeconds = 5
             TopProcessCount = 10
-            WinRMTimeoutSeconds = 5
+            AlertTopProcessCount = 25
+            CpuWarningThreshold = 70
+            CpuCriticalThreshold = 90
+            MaxParallel = 4
+            IncludeEventLogContext = $false
+            AnonymizeUsers = $false
             OutputDelimiter = ';'
+            WinRMTimeoutSeconds = 5
             IncludeDisconnectedSessions = $true
         }
     }
@@ -95,10 +103,18 @@ function Save-SettingsFile {
     if (-not (Test-Path -LiteralPath $configFolder)) { New-Item -ItemType Directory -Path $configFolder -Force | Out-Null }
     $settingsPath = Join-ProjectPath -ChildPath @('config','settings.json')
     $settings = [ordered]@{
+        DurationMinutes = 480
+        IntervalSeconds = 300
         CpuSampleSeconds = $CpuSampleSeconds
         TopProcessCount = $TopProcessCount
-        WinRMTimeoutSeconds = $WinRMTimeoutSeconds
+        AlertTopProcessCount = 25
+        CpuWarningThreshold = 70
+        CpuCriticalThreshold = 90
+        MaxParallel = 4
+        IncludeEventLogContext = $false
+        AnonymizeUsers = $false
         OutputDelimiter = $OutputDelimiter
+        WinRMTimeoutSeconds = $WinRMTimeoutSeconds
         IncludeDisconnectedSessions = $IncludeDisconnectedSessions
     }
     ($settings | ConvertTo-Json -Depth 3) | Set-Content -LiteralPath $settingsPath -Encoding UTF8

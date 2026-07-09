@@ -138,3 +138,70 @@ Import-Csv .\output\summary\summary-20260709-120000.csv -Delimiter ';' |
 ## Hinweise zur Messlogik
 
 Die Gesamt-CPU wird ueber die CIM-Klasse `Win32_PerfFormattedData_PerfOS_Processor` gelesen, damit keine lokalisierten Performance-Counter-Pfade wie `\Processor(_Total)\% Processor Time` benoetigt werden. Die Prozess-CPU wird als Delta gemessen: Das Script liest `Get-Process` zu Beginn, wartet standardmaessig 5 Sekunden und liest die Prozesse erneut. Aus der Differenz der CPU-Sekunden je Prozess und der realen Messdauer wird `ProcessCpuPercent` berechnet. Dadurch werden aktuell CPU-lastige Prozesse sichtbar und nicht nur Prozesse mit hoher historisch kumulierter CPU-Zeit.
+
+## Betriebsanleitung fuer 4-8h CPU-Peak-Analyse
+
+Empfohlene Startwerte fuer belastbare Daten bei geringer Zusatzlast:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CitrixTSHealthCheck.ps1 `
+  -ServerListPath .\config\servers.txt `
+  -OutputPath .\output `
+  -DurationMinutes 480 `
+  -IntervalSeconds 300 `
+  -CpuSampleSeconds 5 `
+  -TopProcessCount 10 `
+  -AlertTopProcessCount 25 `
+  -CpuWarningThreshold 70 `
+  -CpuCriticalThreshold 90 `
+  -MaxParallel 4
+```
+
+Kurztest fuer 30 Minuten:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CitrixTSHealthCheck.ps1 -DurationMinutes 30 -IntervalSeconds 120 -CpuSampleSeconds 5 -MaxParallel 4
+```
+
+Optional mit Eventlog-Kontext und anonymisierten Benutzernamen:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CitrixTSHealthCheck.ps1 -DurationMinutes 480 -IntervalSeconds 300 -IncludeEventLogContext -AnonymizeUsers
+```
+
+### CSV-Dateien
+
+- `output/raw/Raw_ProcessSamples_YYYY-MM-DD.csv`: eine Zeile je geloggtem Prozess und Messpunkt, inklusive PID, SessionID, Benutzer/Domain, CPU-Delta, Speicher, Pfad, CommandLine, Parent-Prozess, Kategorie und Monitoring-Markierung.
+- `output/raw/ServerSamples_YYYY-MM-DD.csv`: eine Zeile je Server und Messpunkt mit CPU, RAM, Sessions, Status, Fehlertext und Warning/Critical-Kennzeichnung.
+- `output/raw/AlertSamples_YYYY-MM-DD.csv`: nur bei CPU-Warnung oder CPU-kritischem Zustand; enthaelt Serverdaten, Alert-Level, Kategorie-Summen und die erweiterten Top-Prozesse.
+- `output/raw/CategorySummary_YYYY-MM-DD.csv`: je Server und Messpunkt aggregierte CPU-Anteile fuer Security, Nexus, Office, Browser, Citrix, Printing, Monitoring, Windows und Other.
+- `output/raw/EventContext_YYYY-MM-DD.csv`: optional bei CPU >= Critical und `-IncludeEventLogContext`; begrenzter Kontext aus System, Application und Defender Operational.
+- `output/summary/RunSummary_YYYY-MM-DD_HH-mm.csv`: Zusammenfassung des gesamten Laufs pro Server mit CPU Durchschnitt/Median/Maximum, Warning/Critical-Anzahl, RAM-/Session-Durchschnitt sowie Top-Prozessen und Top-Kategorien nach kumulierter CPU-Zeit.
+
+### Kategorien und Interpretation
+
+- **Security**: `MsSense`, `SenseNdr`, `MsMpEng`, `CylanceSvc`.
+- **Citrix**: `BrokerAgent`, `CtxGfx`, `Citrix.Wem.Agent.Service`, `wfcrun32`, `wfica32`.
+- **Nexus**: `nexus.framework.healthcare`, `Infoclient`, `anm_neu`.
+- **Office**: `WINWORD`, `EXCEL`, `OUTLOOK`, `POWERPNT`.
+- **Browser**: `msedge`, `msedgewebview2`, `chrome`.
+- **Printing**: `spoolsv`, `splwow64`.
+- **Monitoring**: `wsmprovhost`, `WmiPrvSE`, `powershell`, `pwsh`.
+- **Windows**: `svchost`, `System`, `explorer`, `dwm`.
+
+Interpretationshinweise:
+
+- CPU hoch + Security hoch: Defender/MDE/Cylance Policies, Scans, Ausschluesse und Updatezeitpunkte pruefen.
+- CPU hoch + Nexus hoch: Nexus/Fachanwendung, Updates, Add-ins oder konkrete Benutzeraktion pruefen.
+- CPU hoch + Printing hoch: Druckertreiber, Spooler, haengende Druckjobs und Mapping pruefen.
+- CPU hoch + wenige Sessions: einzelner Prozess oder Stoerfall ist wahrscheinlicher.
+- CPU hoch + viele Sessions: Sizing, Kapazitaet oder Lastverteilung pruefen.
+- `wsmprovhost` und `WmiPrvSE` koennen teilweise durch das Monitoring selbst entstehen; diese Prozesse werden als `IsMonitoringRelated=True` markiert.
+
+### Datenschutz
+
+Standardmaessig werden Prozessbenutzer im Klartext gespeichert, damit eine Ursachenanalyse moeglich ist. Schuetze die CSV-Dateien entsprechend. Mit `-AnonymizeUsers` werden Benutzernamen stabil gehasht; Domains bleiben fuer die Einordnung erhalten.
+
+### CPU-Prozent verstehen
+
+`CpuPercent` ist die Gesamt-CPU des Servers. `ProcessCpuPercent` wird aus CPU-Sekunden-Delta geteilt durch Messdauer berechnet. Ein einzelner mehrthreadiger Prozess kann auf Mehrkernsystemen rechnerisch ueber 100 erreichen; der Wert ist damit kernbezogen. Zur Plausibilisierung werden zusaetzlich `TopProcessCpuPercentSum` und Kategorie-Summen ausgegeben.
