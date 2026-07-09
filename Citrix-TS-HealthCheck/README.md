@@ -6,7 +6,8 @@ PowerShell-Projekt zur regelmaessigen Performance- und Ursachenanalyse von Windo
 
 ```text
 Citrix-TS-HealthCheck/
-├── Invoke-CitrixTSHealthCheck.ps1   # Hauptscript
+├── Invoke-CitrixTSHealthCheck.ps1   # Hauptscript fuer CLI/Scheduled Task
+├── Start-CitrixTSHealthCheckGui.ps1  # Windows-Forms-GUI
 ├── config/
 │   ├── servers.txt                  # Zielserver, ein Host pro Zeile
 │   └── settings.json                # Laufzeitparameter
@@ -35,7 +36,14 @@ Citrix-TS-HealthCheck/
 Test-WSMan -ComputerName TS-SERVER01
 ```
 
-5. Healthcheck manuell starten:
+5. Optional die GUI starten:
+
+```powershell
+Set-Location C:\Scripts\Citrix-TS-HealthCheck
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-CitrixTSHealthCheckGui.ps1
+```
+
+6. Healthcheck manuell ohne GUI starten:
 
 ```powershell
 Set-Location C:\Scripts\Citrix-TS-HealthCheck
@@ -59,6 +67,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CitrixTSHealthC
 - `output/raw/healthcheck-YYYY-MM-DD.csv`: Detaildaten je Server und Top-Prozess. Die Datei wird pro Tag fortgeschrieben.
 - `output/summary/summary-YYYYMMDD-HHMMSS.csv`: Zusammenfassung pro Lauf und Server.
 - `output/logs/healthcheck-YYYY-MM-DD.log`: Lauf- und Fehlermeldungen.
+
+## GUI verwenden
+
+Die Datei `Start-CitrixTSHealthCheckGui.ps1` stellt eine einfache Windows-Forms-Oberflaeche bereit und benoetigt keine externen Module. Sie ist fuer die Bedienung auf dem Managementserver gedacht.
+
+Die GUI bietet drei Bereiche:
+
+- **Konfiguration**: `config\servers.txt` direkt bearbeiten sowie `CpuSampleSeconds`, `TopProcessCount`, `WinRMTimeoutSeconds`, CSV-Trennzeichen und getrennte Sessions setzen.
+- **Ausfuehren**: Konfiguration speichern, `Invoke-CitrixTSHealthCheck.ps1` in einem separaten `powershell.exe`-Prozess starten und Laufstatus anzeigen.
+- **Ausgaben**: Neueste Summary-, Raw-CSV- und Logdatei oder den gesamten Output-Ordner mit dem Windows-Standardprogramm oeffnen.
+
+Startbefehl:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-CitrixTSHealthCheckGui.ps1
+```
 
 ## Scheduled Task Beispiel
 
