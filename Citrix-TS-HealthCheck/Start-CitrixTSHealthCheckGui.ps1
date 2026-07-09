@@ -112,6 +112,11 @@ function Get-LatestFile {
         Select-Object -First 1
 }
 
+function Quote-Argument {
+    param([Parameter(Mandatory=$true)][string]$Value)
+    return '"{0}"' -f ($Value -replace '"', '\"')
+}
+
 function Open-PathWithShell {
     param([Parameter(Mandatory=$true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { throw "Pfad nicht gefunden: $Path" }
@@ -170,7 +175,9 @@ function Start-HealthCheckRun {
         '-ExecutionPolicy', 'Bypass',
         '-File', ('"{0}"' -f $scriptPath),
         '-ConfigPath', ('"{0}"' -f (Join-ProjectPath -ChildPath @('config'))),
-        '-OutputPath', ('"{0}"' -f (Join-ProjectPath -ChildPath @('output')))
+        '-OutputPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('output'))),
+        '-DurationMinutes', ([int]$manualDurationBox.Value),
+        '-IntervalSeconds', ([int]$manualIntervalBox.Value)
     ) -join ' '
 
     $script:HealthCheckProcess = Start-Process -FilePath 'powershell.exe' `
@@ -185,6 +192,35 @@ function Start-HealthCheckRun {
     $progressBar.Style = 'Marquee'
     Add-StatusLine "HealthCheck gestartet. PID: $($script:HealthCheckProcess.Id)"
     $timer.Start()
+}
+
+function Register-HealthCheckScheduledTask {
+    Save-GuiData
+    $scriptPath = Join-ProjectPath -ChildPath @('Invoke-CitrixTSHealthCheck.ps1')
+    if (-not (Test-Path -LiteralPath $scriptPath)) { throw "HealthCheck-Script nicht gefunden: $scriptPath" }
+
+    $taskName = $taskNameBox.Text.Trim()
+    if (-not $taskName) { throw 'Bitte einen Tasknamen angeben.' }
+
+    $actionArguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', (Quote-Argument -Value $scriptPath),
+        '-ConfigPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('config'))),
+        '-OutputPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('output'))),
+        '-DurationMinutes', ([int]$taskRunDurationBox.Value),
+        '-IntervalSeconds', ([int]$taskIntervalBox.Value)
+    ) -join ' '
+
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $actionArguments -WorkingDirectory $ProjectRoot
+    $trigger = New-ScheduledTaskTrigger -Once -At $taskStartPicker.Value `
+        -RepetitionInterval (New-TimeSpan -Minutes ([int]$taskRepeatMinutesBox.Value)) `
+        -RepetitionDuration (New-TimeSpan -Days ([int]$taskRepeatDaysBox.Value))
+    $principalUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
+    $principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours ([int]$taskExecutionLimitHoursBox.Value))
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Add-StatusLine "Scheduled Task eingerichtet: $taskName"
 }
 
 function Complete-HealthCheckRun {
@@ -226,7 +262,9 @@ $runTab = New-Object System.Windows.Forms.TabPage
 $runTab.Text = 'Ausfuehren'
 $outputTab = New-Object System.Windows.Forms.TabPage
 $outputTab.Text = 'Ausgaben'
-$tabs.TabPages.AddRange(@($configTab, $runTab, $outputTab))
+$taskTab = New-Object System.Windows.Forms.TabPage
+$taskTab.Text = 'Taskplanung'
+$tabs.TabPages.AddRange(@($configTab, $runTab, $taskTab, $outputTab))
 
 $configTab.Controls.Add((New-Label -Text 'Serverliste' -X 15 -Y 15 -Width 200))
 $serversBox = New-Object System.Windows.Forms.TextBox
@@ -276,16 +314,32 @@ $reloadButton = New-Button -Text 'Neu laden' -X 575 -Y 260 -Width 130
 $configTab.Controls.AddRange(@($saveButton, $reloadButton))
 
 $runInfo = New-Object System.Windows.Forms.Label
-$runInfo.Text = 'Startet Invoke-CitrixTSHealthCheck.ps1 mit den aktuellen Einstellungen. Die GUI bleibt waehrend des Laufs bedienbar.'
+$runInfo.Text = 'Startet Invoke-CitrixTSHealthCheck.ps1 mit den aktuellen Einstellungen. Bei Dauer 0 wird genau ein Lauf ausgefuehrt.'
 $runInfo.Location = New-Object System.Drawing.Point(15, 25)
 $runInfo.Size = New-Object System.Drawing.Size(840, 40)
 $runTab.Controls.Add($runInfo)
 
-$runButton = New-Button -Text 'HealthCheck starten' -X 15 -Y 80 -Width 170 -Height 34
+$runTab.Controls.Add((New-Label -Text 'Sammeldauer Minuten' -X 15 -Y 80 -Width 170))
+$manualDurationBox = New-Object System.Windows.Forms.NumericUpDown
+$manualDurationBox.Minimum = 0
+$manualDurationBox.Maximum = 10080
+$manualDurationBox.Value = 0
+$manualDurationBox.Location = New-Object System.Drawing.Point(205, 77)
+$runTab.Controls.Add($manualDurationBox)
+
+$runTab.Controls.Add((New-Label -Text 'Intervall Sekunden' -X 15 -Y 120 -Width 170))
+$manualIntervalBox = New-Object System.Windows.Forms.NumericUpDown
+$manualIntervalBox.Minimum = 5
+$manualIntervalBox.Maximum = 86400
+$manualIntervalBox.Value = 60
+$manualIntervalBox.Location = New-Object System.Drawing.Point(205, 117)
+$runTab.Controls.Add($manualIntervalBox)
+
+$runButton = New-Button -Text 'HealthCheck starten' -X 15 -Y 165 -Width 170 -Height 34
 $runTab.Controls.Add($runButton)
 
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(205, 84)
+$progressBar.Location = New-Object System.Drawing.Point(205, 169)
 $progressBar.Size = New-Object System.Drawing.Size(650, 24)
 $runTab.Controls.Add($progressBar)
 
@@ -293,8 +347,8 @@ $statusBox = New-Object System.Windows.Forms.TextBox
 $statusBox.Multiline = $true
 $statusBox.ScrollBars = 'Vertical'
 $statusBox.ReadOnly = $true
-$statusBox.Location = New-Object System.Drawing.Point(15, 135)
-$statusBox.Size = New-Object System.Drawing.Size(840, 410)
+$statusBox.Location = New-Object System.Drawing.Point(15, 220)
+$statusBox.Size = New-Object System.Drawing.Size(840, 325)
 $runTab.Controls.Add($statusBox)
 
 $openSummaryButton = New-Button -Text 'Letzte Summary' -X 25 -Y 35 -Width 150
@@ -302,6 +356,72 @@ $openRawButton = New-Button -Text 'Letzte Raw CSV' -X 190 -Y 35 -Width 150
 $openLogButton = New-Button -Text 'Letztes Log' -X 355 -Y 35 -Width 150
 $openOutputButton = New-Button -Text 'Output Ordner' -X 520 -Y 35 -Width 150
 $outputTab.Controls.AddRange(@($openSummaryButton, $openRawButton, $openLogButton, $openOutputButton))
+
+
+$taskTab.Controls.Add((New-Label -Text 'Taskname' -X 25 -Y 30 -Width 190))
+$taskNameBox = New-Object System.Windows.Forms.TextBox
+$taskNameBox.Text = 'Citrix TS HealthCheck'
+$taskNameBox.Location = New-Object System.Drawing.Point(240, 27)
+$taskNameBox.Size = New-Object System.Drawing.Size(260, 22)
+$taskTab.Controls.Add($taskNameBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Startzeit' -X 25 -Y 70 -Width 190))
+$taskStartPicker = New-Object System.Windows.Forms.DateTimePicker
+$taskStartPicker.Format = 'Custom'
+$taskStartPicker.CustomFormat = 'yyyy-MM-dd HH:mm'
+$taskStartPicker.Value = (Get-Date).AddMinutes(5)
+$taskStartPicker.Location = New-Object System.Drawing.Point(240, 67)
+$taskStartPicker.Size = New-Object System.Drawing.Size(180, 22)
+$taskTab.Controls.Add($taskStartPicker)
+
+$taskTab.Controls.Add((New-Label -Text 'Task alle Minuten' -X 25 -Y 110 -Width 190))
+$taskRepeatMinutesBox = New-Object System.Windows.Forms.NumericUpDown
+$taskRepeatMinutesBox.Minimum = 1
+$taskRepeatMinutesBox.Maximum = 1440
+$taskRepeatMinutesBox.Value = 15
+$taskRepeatMinutesBox.Location = New-Object System.Drawing.Point(240, 107)
+$taskTab.Controls.Add($taskRepeatMinutesBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Wiederholen fuer Tage' -X 25 -Y 150 -Width 190))
+$taskRepeatDaysBox = New-Object System.Windows.Forms.NumericUpDown
+$taskRepeatDaysBox.Minimum = 1
+$taskRepeatDaysBox.Maximum = 3650
+$taskRepeatDaysBox.Value = 365
+$taskRepeatDaysBox.Location = New-Object System.Drawing.Point(240, 147)
+$taskTab.Controls.Add($taskRepeatDaysBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Sammeldauer je Start Min.' -X 25 -Y 190 -Width 190))
+$taskRunDurationBox = New-Object System.Windows.Forms.NumericUpDown
+$taskRunDurationBox.Minimum = 0
+$taskRunDurationBox.Maximum = 10080
+$taskRunDurationBox.Value = 5
+$taskRunDurationBox.Location = New-Object System.Drawing.Point(240, 187)
+$taskTab.Controls.Add($taskRunDurationBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Messintervall Sekunden' -X 25 -Y 230 -Width 190))
+$taskIntervalBox = New-Object System.Windows.Forms.NumericUpDown
+$taskIntervalBox.Minimum = 5
+$taskIntervalBox.Maximum = 86400
+$taskIntervalBox.Value = 60
+$taskIntervalBox.Location = New-Object System.Drawing.Point(240, 227)
+$taskTab.Controls.Add($taskIntervalBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Max. Laufzeit Stunden' -X 25 -Y 270 -Width 190))
+$taskExecutionLimitHoursBox = New-Object System.Windows.Forms.NumericUpDown
+$taskExecutionLimitHoursBox.Minimum = 1
+$taskExecutionLimitHoursBox.Maximum = 168
+$taskExecutionLimitHoursBox.Value = 2
+$taskExecutionLimitHoursBox.Location = New-Object System.Drawing.Point(240, 267)
+$taskTab.Controls.Add($taskExecutionLimitHoursBox)
+
+$createTaskButton = New-Button -Text 'Task einrichten' -X 25 -Y 320 -Width 150 -Height 34
+$taskTab.Controls.Add($createTaskButton)
+
+$taskHint = New-Object System.Windows.Forms.Label
+$taskHint.Text = 'Der Task wird fuer den aktuellen Windows-Benutzer mit hoechsten Rechten eingerichtet. Die GUI muss dafuer ggf. als Administrator gestartet werden.'
+$taskHint.Location = New-Object System.Drawing.Point(25, 375)
+$taskHint.Size = New-Object System.Drawing.Size(820, 45)
+$taskTab.Controls.Add($taskHint)
 
 $outputHint = New-Object System.Windows.Forms.Label
 $outputHint.Text = 'Die Schaltflaechen oeffnen die jeweils neueste erzeugte Datei beziehungsweise den Output-Ordner mit dem Windows-Standardprogramm.'
@@ -330,6 +450,13 @@ $runButton.Add_Click({
         $progressBar.Style = 'Blocks'
         Add-StatusLine "Start fehlgeschlagen: $($_.Exception.Message)"
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Start fehlgeschlagen', 'OK', 'Error') | Out-Null
+    }
+})
+$createTaskButton.Add_Click({
+    try { Register-HealthCheckScheduledTask }
+    catch {
+        Add-StatusLine "Task-Einrichtung fehlgeschlagen: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Task-Einrichtung fehlgeschlagen', 'OK', 'Error') | Out-Null
     }
 })
 $openSummaryButton.Add_Click({

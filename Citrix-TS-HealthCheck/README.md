@@ -50,6 +50,12 @@ Set-Location C:\Scripts\Citrix-TS-HealthCheck
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CitrixTSHealthCheck.ps1 -Verbose
 ```
 
+Laengerer manueller Sammellauf, z. B. 120 Minuten mit Messung alle 60 Sekunden:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CitrixTSHealthCheck.ps1 -DurationMinutes 120 -IntervalSeconds 60
+```
+
 ## Konfiguration
 
 `config/settings.json` enthaelt folgende Werte:
@@ -72,10 +78,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CitrixTSHealthC
 
 Die Datei `Start-CitrixTSHealthCheckGui.ps1` stellt eine einfache Windows-Forms-Oberflaeche bereit und benoetigt keine externen Module. Sie ist fuer die Bedienung auf dem Managementserver gedacht.
 
-Die GUI bietet drei Bereiche:
+Die GUI bietet vier Bereiche:
 
 - **Konfiguration**: `config\servers.txt` direkt bearbeiten sowie `CpuSampleSeconds`, `TopProcessCount`, `WinRMTimeoutSeconds`, CSV-Trennzeichen und getrennte Sessions setzen.
-- **Ausfuehren**: Konfiguration speichern, `Invoke-CitrixTSHealthCheck.ps1` in einem separaten `powershell.exe`-Prozess starten und Laufstatus anzeigen.
+- **Ausfuehren**: Konfiguration speichern, `Invoke-CitrixTSHealthCheck.ps1` in einem separaten `powershell.exe`-Prozess starten, die Sammeldauer in Minuten festlegen und das Intervall zwischen den einzelnen Messlaeufen setzen. `0` Minuten bedeutet weiterhin: genau ein Lauf.
+- **Taskplanung**: Einen wiederkehrenden Windows Scheduled Task fuer den aktuellen Benutzer einrichten. Konfigurierbar sind Taskname, Startzeit, Wiederholintervall, Wiederholdauer, Sammeldauer je Taskstart, Messintervall und maximale Laufzeit.
 - **Ausgaben**: Neueste Summary-, Raw-CSV- und Logdatei oder den gesamten Output-Ordner mit dem Windows-Standardprogramm oeffnen.
 
 Startbefehl:
@@ -92,8 +99,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Scripts\Citrix-TS-Hea
 
 ## Scheduled Task Beispiel
 
+Die GUI kann den Task im Tab **Taskplanung** einrichten. Alternativ kann er manuell per PowerShell erstellt werden:
+
 ```powershell
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\Citrix-TS-HealthCheck\Invoke-CitrixTSHealthCheck.ps1"'
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\Citrix-TS-HealthCheck\Invoke-CitrixTSHealthCheck.ps1" -DurationMinutes 10 -IntervalSeconds 60'
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 1)
 $principal = New-ScheduledTaskPrincipal -UserId 'DOMAIN\svc-ts-healthcheck' -LogonType Password -RunLevel Highest
 Register-ScheduledTask -TaskName 'Citrix TS HealthCheck' -Action $action -Trigger $trigger -Principal $principal -Description 'Prueft Citrix/Terminalserver Performance per PowerShell Remoting.'

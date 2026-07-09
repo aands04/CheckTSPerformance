@@ -10,7 +10,9 @@
 [CmdletBinding()]
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'config'),
-    [string]$OutputPath = (Join-Path $PSScriptRoot 'output')
+    [string]$OutputPath = (Join-Path $PSScriptRoot 'output'),
+    [int]$DurationMinutes = 0,
+    [int]$IntervalSeconds = 60
 )
 
 Set-StrictMode -Version 2.0
@@ -214,46 +216,70 @@ function Convert-HealthResultToRows {
     }
 }
 
+function Invoke-HealthCheckOnce {
+    param(
+        [Parameter(Mandatory=$true)]$Settings,
+        [Parameter(Mandatory=$true)][string[]]$Servers,
+        [Parameter(Mandatory=$true)][string]$RawPath,
+        [Parameter(Mandatory=$true)][string]$LogPath,
+        [Parameter(Mandatory=$true)][string]$SummaryPath,
+        [Parameter(Mandatory=$true)][string]$Delimiter
+    )
+
+    $runId = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $day = Get-Date -Format 'yyyy-MM-dd'
+    $logFile = Join-Path $LogPath "healthcheck-$day.log"
+    $rawFile = Join-Path $RawPath "healthcheck-$day.csv"
+    $summaryFile = Join-Path $SummaryPath "summary-$runId.csv"
+    $summaryRows = @()
+    $rawRows = @()
+
+    Write-Log -LogPath $logFile -Level INFO -Message "Run $runId gestartet. Server: $($Servers.Count)"
+    foreach ($server in $Servers) {
+        try {
+            Write-Log -LogPath $logFile -Level INFO -Message "Pruefe WinRM: $server"
+            if (-not (Test-WinRMReachability -ComputerName $server -TimeoutSeconds ([int]$Settings.WinRMTimeoutSeconds))) { throw "WinRM nicht erreichbar oder Timeout nach $($Settings.WinRMTimeoutSeconds) Sekunden." }
+            $result = Invoke-RemoteHealthSample -ComputerName $server -Settings $Settings
+            $rows = @(Convert-HealthResultToRows -TargetServer $server -Result $result)
+            $rank = 1
+            foreach ($row in $rows) { $row.ProcessRank = $rank; $rank++ }
+            $rawRows += $rows
+            $summaryRows += [pscustomobject]@{
+                RunId = $runId; Timestamp = $result.SampleTime; TargetServer = $server; Status = 'OK'; CpuPercent = $result.CpuPercent;
+                MemoryPercent = $result.MemoryPercent; ActiveSessions = $result.ActiveSessions; DisconnectedSessions = $result.DisconnectedSessions;
+                TopProcess = if ($rows.Count -gt 0) { $rows[0].ProcessName } else { '' }; TopProcessCpuPercent = if ($rows.Count -gt 0) { $rows[0].ProcessCpuPercent } else { 0 }; ErrorMessage = ''
+            }
+        }
+        catch {
+            $message = $_.Exception.Message
+            Write-Log -LogPath $logFile -Level ERROR -Message "${server}: $message"
+            $summaryRows += [pscustomobject]@{ RunId = $runId; Timestamp = (Get-Date).ToString('s'); TargetServer = $server; Status = 'ERROR'; CpuPercent = ''; MemoryPercent = ''; ActiveSessions = ''; DisconnectedSessions = ''; TopProcess = ''; TopProcessCpuPercent = ''; ErrorMessage = $message }
+        }
+    }
+
+    if ($rawRows.Count -gt 0) { $rawRows | Export-Csv -LiteralPath $rawFile -Delimiter $Delimiter -NoTypeInformation -Append -Encoding UTF8 }
+    $summaryRows | Export-Csv -LiteralPath $summaryFile -Delimiter $Delimiter -NoTypeInformation -Encoding UTF8
+    Write-Log -LogPath $logFile -Level INFO -Message "Run $runId beendet. Summary: $summaryFile Raw: $rawFile"
+    return $summaryRows
+}
+
 $rawPath = Join-Path $OutputPath 'raw'
 $logPath = Join-Path $OutputPath 'logs'
 $summaryPath = Join-Path $OutputPath 'summary'
 Ensure-Directory $rawPath; Ensure-Directory $logPath; Ensure-Directory $summaryPath
 
-$runId = Get-Date -Format 'yyyyMMdd-HHmmss'
-$day = Get-Date -Format 'yyyy-MM-dd'
-$logFile = Join-Path $logPath "healthcheck-$day.log"
-$rawFile = Join-Path $rawPath "healthcheck-$day.csv"
-$summaryFile = Join-Path $summaryPath "summary-$runId.csv"
-
 $settings = Read-Settings -Path (Join-Path $ConfigPath 'settings.json')
 $servers = @(Read-ServerList -Path (Join-Path $ConfigPath 'servers.txt'))
-$summaryRows = @()
-$rawRows = @()
-
-Write-Log -LogPath $logFile -Level INFO -Message "Run $runId gestartet. Server: $($servers.Count)"
-foreach ($server in $servers) {
-    try {
-        Write-Log -LogPath $logFile -Level INFO -Message "Pruefe WinRM: $server"
-        if (-not (Test-WinRMReachability -ComputerName $server -TimeoutSeconds ([int]$settings.WinRMTimeoutSeconds))) { throw "WinRM nicht erreichbar oder Timeout nach $($settings.WinRMTimeoutSeconds) Sekunden." }
-        $result = Invoke-RemoteHealthSample -ComputerName $server -Settings $settings
-        $rows = @(Convert-HealthResultToRows -TargetServer $server -Result $result)
-        $rank = 1
-        foreach ($row in $rows) { $row.ProcessRank = $rank; $rank++ }
-        $rawRows += $rows
-        $summaryRows += [pscustomobject]@{
-            RunId = $runId; Timestamp = $result.SampleTime; TargetServer = $server; Status = 'OK'; CpuPercent = $result.CpuPercent;
-            MemoryPercent = $result.MemoryPercent; ActiveSessions = $result.ActiveSessions; DisconnectedSessions = $result.DisconnectedSessions;
-            TopProcess = if ($rows.Count -gt 0) { $rows[0].ProcessName } else { '' }; TopProcessCpuPercent = if ($rows.Count -gt 0) { $rows[0].ProcessCpuPercent } else { 0 }; ErrorMessage = ''
-        }
-    }
-    catch {
-        $message = $_.Exception.Message
-        Write-Log -LogPath $logFile -Level ERROR -Message "${server}: $message"
-        $summaryRows += [pscustomobject]@{ RunId = $runId; Timestamp = (Get-Date).ToString('s'); TargetServer = $server; Status = 'ERROR'; CpuPercent = ''; MemoryPercent = ''; ActiveSessions = ''; DisconnectedSessions = ''; TopProcess = ''; TopProcessCpuPercent = ''; ErrorMessage = $message }
-    }
+if ($IntervalSeconds -lt 1) { $IntervalSeconds = 60 }
+if ($DurationMinutes -lt 1) {
+    Invoke-HealthCheckOnce -Settings $settings -Servers $servers -RawPath $rawPath -LogPath $logPath -SummaryPath $summaryPath -Delimiter $settings.OutputDelimiter
+    return
 }
 
-if ($rawRows.Count -gt 0) { $rawRows | Export-Csv -LiteralPath $rawFile -Delimiter $settings.OutputDelimiter -NoTypeInformation -Append -Encoding UTF8 }
-$summaryRows | Export-Csv -LiteralPath $summaryFile -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
-Write-Log -LogPath $logFile -Level INFO -Message "Run $runId beendet. Summary: $summaryFile Raw: $rawFile"
-$summaryRows
+$startedAt = Get-Date
+$endAt = $startedAt.AddMinutes($DurationMinutes)
+do {
+    Invoke-HealthCheckOnce -Settings $settings -Servers $servers -RawPath $rawPath -LogPath $logPath -SummaryPath $summaryPath -Delimiter $settings.OutputDelimiter
+    $remainingSeconds = [int][Math]::Floor(($endAt - (Get-Date)).TotalSeconds)
+    if ($remainingSeconds -gt 0) { Start-Sleep -Seconds ([Math]::Min($IntervalSeconds, $remainingSeconds)) }
+} while ((Get-Date) -lt $endAt)
