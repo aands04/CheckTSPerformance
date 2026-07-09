@@ -9,9 +9,9 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ServerListPath = (Join-Path $PSScriptRoot 'config\servers.txt'),
-    [string]$ConfigPath = (Join-Path $PSScriptRoot 'config\settings.json'),
-    [string]$OutputPath = (Join-Path $PSScriptRoot 'output'),
+    [string]$ServerListPath,
+    [string]$ConfigPath,
+    [string]$OutputPath,
     [int]$DurationMinutes,
     [int]$IntervalSeconds,
     [int]$CpuSampleSeconds,
@@ -27,6 +27,19 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+$script:InvocationPath = $MyInvocation.MyCommand.Path
+
+
+function Resolve-ScriptRoot {
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { return $PSScriptRoot }
+    if (-not [string]::IsNullOrWhiteSpace($script:InvocationPath)) { return (Split-Path -Parent $script:InvocationPath) }
+    return (Get-Location).ProviderPath
+}
+
+$scriptRoot = Resolve-ScriptRoot
+if ([string]::IsNullOrWhiteSpace($ServerListPath)) { $ServerListPath = Join-Path -Path $scriptRoot -ChildPath 'config\servers.txt' }
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path -Path $scriptRoot -ChildPath 'config\settings.json' }
+if ([string]::IsNullOrWhiteSpace($OutputPath)) { $OutputPath = Join-Path -Path $scriptRoot -ChildPath 'output' }
 
 function New-DefaultSettings {
     [pscustomobject]@{
