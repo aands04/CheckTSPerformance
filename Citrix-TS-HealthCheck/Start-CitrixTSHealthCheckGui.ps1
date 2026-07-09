@@ -244,13 +244,27 @@ function Register-HealthCheckScheduledTask {
         '-ConfigPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('config'))),
         '-OutputPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('output'))),
         '-DurationMinutes', ([int]$taskRunDurationBox.Value),
-        '-IntervalSeconds', ([int]$taskIntervalBox.Value)
-    ) -join ' '
+        '-IntervalSeconds', ([int]$taskIntervalBox.Value),
+        '-CpuSampleSeconds', ([int]$taskCpuSampleBox.Value),
+        '-TopProcessCount', ([int]$taskTopProcessBox.Value),
+        '-AlertTopProcessCount', ([int]$taskAlertTopProcessBox.Value),
+        '-CpuWarningThreshold', ([double]$taskWarningBox.Value),
+        '-CpuCriticalThreshold', ([double]$taskCriticalBox.Value),
+        '-MaxParallel', ([int]$taskMaxParallelBox.Value)
+    )
+    if ($taskIncludeEventsBox.Checked) { $actionArguments += '-IncludeEventLogContext' }
+    if ($taskAnonymizeBox.Checked) { $actionArguments += '-AnonymizeUsers' }
+    $actionArguments = $actionArguments -join ' '
 
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $actionArguments -WorkingDirectory $ProjectRoot
-    $trigger = New-ScheduledTaskTrigger -Once -At $taskStartPicker.Value `
-        -RepetitionInterval (New-TimeSpan -Minutes ([int]$taskRepeatMinutesBox.Value)) `
-        -RepetitionDuration (New-TimeSpan -Days ([int]$taskRepeatDaysBox.Value))
+    if ($taskRepeatEnabledBox.Checked) {
+        $trigger = New-ScheduledTaskTrigger -Once -At $taskStartPicker.Value `
+            -RepetitionInterval (New-TimeSpan -Minutes ([int]$taskRepeatMinutesBox.Value)) `
+            -RepetitionDuration (New-TimeSpan -Days ([int]$taskRepeatDaysBox.Value))
+    }
+    else {
+        $trigger = New-ScheduledTaskTrigger -Once -At $taskStartPicker.Value
+    }
     $principalUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
     $principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType Interactive -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours ([int]$taskExecutionLimitHoursBox.Value))
@@ -299,6 +313,7 @@ $outputTab = New-Object System.Windows.Forms.TabPage
 $outputTab.Text = 'Ausgaben'
 $taskTab = New-Object System.Windows.Forms.TabPage
 $taskTab.Text = 'Taskplanung'
+$taskTab.AutoScroll = $true
 $tabs.TabPages.AddRange(@($configTab, $runTab, $taskTab, $outputTab))
 
 $configTab.Controls.Add((New-Label -Text 'Serverliste' -X 15 -Y 15 -Width 200))
@@ -471,7 +486,19 @@ $taskStartPicker.Location = New-Object System.Drawing.Point(240, 67)
 $taskStartPicker.Size = New-Object System.Drawing.Size(180, 22)
 $taskTab.Controls.Add($taskStartPicker)
 
-$taskTab.Controls.Add((New-Label -Text 'Task alle Minuten' -X 25 -Y 110 -Width 190))
+$taskTomorrow7Button = New-Button -Text 'Morgen 07:00' -X 520 -Y 27 -Width 110 -Height 28
+$taskTab.Controls.Add($taskTomorrow7Button)
+$taskTomorrow8Button = New-Button -Text 'Morgen 08:00' -X 645 -Y 27 -Width 110 -Height 28
+$taskTab.Controls.Add($taskTomorrow8Button)
+
+$taskRepeatEnabledBox = New-Object System.Windows.Forms.CheckBox
+$taskRepeatEnabledBox.Text = 'Wiederholen aktivieren'
+$taskRepeatEnabledBox.Location = New-Object System.Drawing.Point(520, 67)
+$taskRepeatEnabledBox.Size = New-Object System.Drawing.Size(200, 24)
+$taskRepeatEnabledBox.Checked = $false
+$taskTab.Controls.Add($taskRepeatEnabledBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Wdh. alle Minuten' -X 25 -Y 110 -Width 190))
 $taskRepeatMinutesBox = New-Object System.Windows.Forms.NumericUpDown
 $taskRepeatMinutesBox.Minimum = 1
 $taskRepeatMinutesBox.Maximum = 1440
@@ -491,7 +518,7 @@ $taskTab.Controls.Add((New-Label -Text 'Sammeldauer je Start Min.' -X 25 -Y 190 
 $taskRunDurationBox = New-Object System.Windows.Forms.NumericUpDown
 $taskRunDurationBox.Minimum = 0
 $taskRunDurationBox.Maximum = 10080
-$taskRunDurationBox.Value = 5
+$taskRunDurationBox.Value = 480
 $taskRunDurationBox.Location = New-Object System.Drawing.Point(240, 187)
 $taskTab.Controls.Add($taskRunDurationBox)
 
@@ -499,7 +526,7 @@ $taskTab.Controls.Add((New-Label -Text 'Messintervall Sekunden' -X 25 -Y 230 -Wi
 $taskIntervalBox = New-Object System.Windows.Forms.NumericUpDown
 $taskIntervalBox.Minimum = 5
 $taskIntervalBox.Maximum = 86400
-$taskIntervalBox.Value = 60
+$taskIntervalBox.Value = 300
 $taskIntervalBox.Location = New-Object System.Drawing.Point(240, 227)
 $taskTab.Controls.Add($taskIntervalBox)
 
@@ -507,9 +534,73 @@ $taskTab.Controls.Add((New-Label -Text 'Max. Laufzeit Stunden' -X 25 -Y 270 -Wid
 $taskExecutionLimitHoursBox = New-Object System.Windows.Forms.NumericUpDown
 $taskExecutionLimitHoursBox.Minimum = 1
 $taskExecutionLimitHoursBox.Maximum = 168
-$taskExecutionLimitHoursBox.Value = 2
+$taskExecutionLimitHoursBox.Value = 10
 $taskExecutionLimitHoursBox.Location = New-Object System.Drawing.Point(240, 267)
 $taskTab.Controls.Add($taskExecutionLimitHoursBox)
+
+
+$taskTab.Controls.Add((New-Label -Text 'CPU Delta Sekunden' -X 430 -Y 110 -Width 170))
+$taskCpuSampleBox = New-Object System.Windows.Forms.NumericUpDown
+$taskCpuSampleBox.Minimum = 1
+$taskCpuSampleBox.Maximum = 300
+$taskCpuSampleBox.Value = 5
+$taskCpuSampleBox.Location = New-Object System.Drawing.Point(620, 107)
+$taskTab.Controls.Add($taskCpuSampleBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Top Prozesse' -X 430 -Y 150 -Width 170))
+$taskTopProcessBox = New-Object System.Windows.Forms.NumericUpDown
+$taskTopProcessBox.Minimum = 1
+$taskTopProcessBox.Maximum = 100
+$taskTopProcessBox.Value = 10
+$taskTopProcessBox.Location = New-Object System.Drawing.Point(620, 147)
+$taskTab.Controls.Add($taskTopProcessBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Alert Top Prozesse' -X 430 -Y 190 -Width 170))
+$taskAlertTopProcessBox = New-Object System.Windows.Forms.NumericUpDown
+$taskAlertTopProcessBox.Minimum = 1
+$taskAlertTopProcessBox.Maximum = 200
+$taskAlertTopProcessBox.Value = 25
+$taskAlertTopProcessBox.Location = New-Object System.Drawing.Point(620, 187)
+$taskTab.Controls.Add($taskAlertTopProcessBox)
+
+$taskTab.Controls.Add((New-Label -Text 'CPU Warn/Kritisch %' -X 430 -Y 230 -Width 170))
+$taskWarningBox = New-Object System.Windows.Forms.NumericUpDown
+$taskWarningBox.Minimum = 1
+$taskWarningBox.Maximum = 100
+$taskWarningBox.Value = 70
+$taskWarningBox.Location = New-Object System.Drawing.Point(620, 227)
+$taskTab.Controls.Add($taskWarningBox)
+$taskCriticalBox = New-Object System.Windows.Forms.NumericUpDown
+$taskCriticalBox.Minimum = 1
+$taskCriticalBox.Maximum = 100
+$taskCriticalBox.Value = 90
+$taskCriticalBox.Location = New-Object System.Drawing.Point(735, 227)
+$taskTab.Controls.Add($taskCriticalBox)
+
+$taskTab.Controls.Add((New-Label -Text 'MaxParallel' -X 430 -Y 270 -Width 170))
+$taskMaxParallelBox = New-Object System.Windows.Forms.NumericUpDown
+$taskMaxParallelBox.Minimum = 1
+$taskMaxParallelBox.Maximum = 64
+$taskMaxParallelBox.Value = 4
+$taskMaxParallelBox.Location = New-Object System.Drawing.Point(620, 267)
+$taskTab.Controls.Add($taskMaxParallelBox)
+
+$taskIncludeEventsBox = New-Object System.Windows.Forms.CheckBox
+$taskIncludeEventsBox.Text = 'Eventlog-Kontext bei Critical'
+$taskIncludeEventsBox.Location = New-Object System.Drawing.Point(430, 310)
+$taskIncludeEventsBox.Size = New-Object System.Drawing.Size(230, 24)
+$taskTab.Controls.Add($taskIncludeEventsBox)
+
+$taskAnonymizeBox = New-Object System.Windows.Forms.CheckBox
+$taskAnonymizeBox.Text = 'Benutzer anonymisieren'
+$taskAnonymizeBox.Location = New-Object System.Drawing.Point(665, 310)
+$taskAnonymizeBox.Size = New-Object System.Drawing.Size(190, 24)
+$taskTab.Controls.Add($taskAnonymizeBox)
+
+$task4hPresetButton = New-Button -Text '4h Preset' -X 190 -Y 320 -Width 110 -Height 34
+$taskTab.Controls.Add($task4hPresetButton)
+$task8hPresetButton = New-Button -Text '8h Preset' -X 315 -Y 320 -Width 110 -Height 34
+$taskTab.Controls.Add($task8hPresetButton)
 
 $createTaskButton = New-Button -Text 'Task einrichten' -X 25 -Y 320 -Width 150 -Height 34
 $taskTab.Controls.Add($createTaskButton)
@@ -559,6 +650,38 @@ $runButton.Add_Click({
         Add-StatusLine "Start fehlgeschlagen: $($_.Exception.Message)"
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Start fehlgeschlagen', 'OK', 'Error') | Out-Null
     }
+})
+$taskTomorrow7Button.Add_Click({
+    $taskStartPicker.Value = (Get-Date).Date.AddDays(1).AddHours(7)
+    Add-StatusLine 'Taskstart auf morgen 07:00 gesetzt.'
+})
+$taskTomorrow8Button.Add_Click({
+    $taskStartPicker.Value = (Get-Date).Date.AddDays(1).AddHours(8)
+    Add-StatusLine 'Taskstart auf morgen 08:00 gesetzt.'
+})
+$task4hPresetButton.Add_Click({
+    $taskRunDurationBox.Value = 240
+    $taskIntervalBox.Value = 300
+    $taskCpuSampleBox.Value = 5
+    $taskTopProcessBox.Value = 10
+    $taskAlertTopProcessBox.Value = 25
+    $taskWarningBox.Value = 70
+    $taskCriticalBox.Value = 90
+    $taskMaxParallelBox.Value = 4
+    $taskExecutionLimitHoursBox.Value = 6
+    Add-StatusLine 'Task 4h Preset gesetzt.'
+})
+$task8hPresetButton.Add_Click({
+    $taskRunDurationBox.Value = 480
+    $taskIntervalBox.Value = 300
+    $taskCpuSampleBox.Value = 5
+    $taskTopProcessBox.Value = 10
+    $taskAlertTopProcessBox.Value = 25
+    $taskWarningBox.Value = 70
+    $taskCriticalBox.Value = 90
+    $taskMaxParallelBox.Value = 4
+    $taskExecutionLimitHoursBox.Value = 10
+    Add-StatusLine 'Task 8h Preset gesetzt.'
 })
 $createTaskButton.Add_Click({
     try { Register-HealthCheckScheduledTask }

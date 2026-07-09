@@ -216,3 +216,13 @@ Im Tab **Ausfuehren** koennen jetzt auch die wichtigsten Langlaufparameter geset
 - Optional Eventlog-Kontext bei Critical und Benutzer-Anonymisierung.
 
 Die Schaltflaeche **8h Preset** setzt empfohlene Startwerte fuer einen 8-Stunden-Lauf mit geringer Zusatzlast.
+
+### 4h-/8h-Lauf per GUI im Taskplaner einrichten
+
+Im Tab **Taskplanung** kann ein geplanter Lauf z. B. fuer morgen 07:00 oder 08:00 eingerichtet werden:
+
+1. **Morgen 07:00** oder **Morgen 08:00** klicken oder Startzeit manuell setzen.
+2. **4h Preset** oder **8h Preset** klicken; alternativ Sammeldauer, Intervall, CPU-Delta, Top-Prozess-Anzahlen, Schwellwerte und MaxParallel manuell setzen.
+3. **Wiederholen aktivieren** nur setzen, wenn der Task regelmaessig wiederholt werden soll. Ohne Haken wird genau ein geplanter Lauf angelegt.
+4. Optional Eventlog-Kontext oder Benutzer-Anonymisierung aktivieren.
+5. **Task einrichten** klicken. Die GUI sollte dafuer bei Bedarf als Administrator gestartet werden.
