@@ -83,6 +83,7 @@ function Read-SettingsFile {
             MaxParallel = 4
             IncludeEventLogContext = $false
             AnonymizeUsers = $false
+            MaxEventsPerAlert = 50
             OutputDelimiter = ';'
             WinRMTimeoutSeconds = 5
             IncludeDisconnectedSessions = $true
@@ -113,6 +114,7 @@ function Save-SettingsFile {
         MaxParallel = 4
         IncludeEventLogContext = $false
         AnonymizeUsers = $false
+        MaxEventsPerAlert = 50
         OutputDelimiter = $OutputDelimiter
         WinRMTimeoutSeconds = $WinRMTimeoutSeconds
         IncludeDisconnectedSessions = $IncludeDisconnectedSessions
@@ -164,6 +166,7 @@ function Load-GuiData {
     if ($runCriticalBox) { $runCriticalBox.Value = [decimal]$settings.CpuCriticalThreshold }
     if ($runMaxParallelBox) { $runMaxParallelBox.Value = [decimal]$settings.MaxParallel }
     if ($runIncludeEventsBox) { $runIncludeEventsBox.Checked = [bool]$settings.IncludeEventLogContext }
+    if ($runMaxEventsBox) { $runMaxEventsBox.Value = [decimal]$settings.MaxEventsPerAlert }
     if ($runAnonymizeBox) { $runAnonymizeBox.Checked = [bool]$settings.AnonymizeUsers }
     Add-StatusLine 'Konfiguration geladen.'
 }
@@ -210,11 +213,13 @@ function Start-HealthCheckRun {
         '-AlertTopProcessCount', ([int]$runAlertTopProcessBox.Value),
         '-CpuWarningThreshold', ([double]$runWarningBox.Value),
         '-CpuCriticalThreshold', ([double]$runCriticalBox.Value),
-        '-MaxParallel', ([int]$runMaxParallelBox.Value)
+        '-MaxParallel', ([int]$runMaxParallelBox.Value),
+        '-MaxEventsPerAlert', ([int]$runMaxEventsBox.Value)
     )
     if ($runIncludeEventsBox.Checked) { $arguments += '-IncludeEventLogContext' }
     if ($runAnonymizeBox.Checked) { $arguments += '-AnonymizeUsers' }
     $arguments = $arguments -join ' '
+    Add-StatusLine ("PowerShell-Aufruf: powershell.exe $arguments")
 
     $script:HealthCheckProcess = Start-Process -FilePath 'powershell.exe' `
         -ArgumentList $arguments `
@@ -252,11 +257,13 @@ function Register-HealthCheckScheduledTask {
         '-AlertTopProcessCount', ([int]$taskAlertTopProcessBox.Value),
         '-CpuWarningThreshold', ([double]$taskWarningBox.Value),
         '-CpuCriticalThreshold', ([double]$taskCriticalBox.Value),
-        '-MaxParallel', ([int]$taskMaxParallelBox.Value)
+        '-MaxParallel', ([int]$taskMaxParallelBox.Value),
+        '-MaxEventsPerAlert', ([int]$taskMaxEventsBox.Value)
     )
     if ($taskIncludeEventsBox.Checked) { $actionArguments += '-IncludeEventLogContext' }
     if ($taskAnonymizeBox.Checked) { $actionArguments += '-AnonymizeUsers' }
     $actionArguments = $actionArguments -join ' '
+    Add-StatusLine ("Task PowerShell-Aufruf: powershell.exe $actionArguments")
 
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $actionArguments -WorkingDirectory $ProjectRoot
     if ($taskRepeatEnabledBox.Checked) {
@@ -293,8 +300,10 @@ function Complete-HealthCheckRun {
         if ($errorOutput) { Add-StatusLine "Fehlerausgabe: $($errorOutput.Trim())" }
     }
 
-    $latestSummary = Get-LatestFile -Folder (Join-ProjectPath -ChildPath @('output','summary')) -Filter 'summary-*.csv'
+    $latestSummary = Get-LatestFile -Folder (Join-ProjectPath -ChildPath @('output','summary')) -Filter 'RunSummary_*.csv'
     if ($latestSummary) { Add-StatusLine "Letzte Zusammenfassung: $($latestSummary.FullName)" }
+    Add-StatusLine "Output: $(Join-ProjectPath -ChildPath @('output'))"
+    Add-StatusLine "Logs: $(Join-ProjectPath -ChildPath @('output','logs'))"
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -440,6 +449,14 @@ $runIncludeEventsBox.Location = New-Object System.Drawing.Point(430, 230)
 $runIncludeEventsBox.Size = New-Object System.Drawing.Size(230, 24)
 $runTab.Controls.Add($runIncludeEventsBox)
 
+$runTab.Controls.Add((New-Label -Text 'Max Events/Alert' -X 430 -Y 255 -Width 150))
+$runMaxEventsBox = New-Object System.Windows.Forms.NumericUpDown
+$runMaxEventsBox.Minimum = 0
+$runMaxEventsBox.Maximum = 500
+$runMaxEventsBox.Value = 50
+$runMaxEventsBox.Location = New-Object System.Drawing.Point(620, 252)
+$runTab.Controls.Add($runMaxEventsBox)
+
 $runAnonymizeBox = New-Object System.Windows.Forms.CheckBox
 $runAnonymizeBox.Text = 'Benutzer anonymisieren'
 $runAnonymizeBox.Location = New-Object System.Drawing.Point(665, 230)
@@ -453,7 +470,7 @@ $runButton = New-Button -Text 'HealthCheck starten' -X 15 -Y 165 -Width 170 -Hei
 $runTab.Controls.Add($runButton)
 
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(15, 255)
+$progressBar.Location = New-Object System.Drawing.Point(15, 285)
 $progressBar.Size = New-Object System.Drawing.Size(840, 24)
 $runTab.Controls.Add($progressBar)
 
@@ -461,8 +478,8 @@ $statusBox = New-Object System.Windows.Forms.TextBox
 $statusBox.Multiline = $true
 $statusBox.ScrollBars = 'Vertical'
 $statusBox.ReadOnly = $true
-$statusBox.Location = New-Object System.Drawing.Point(15, 290)
-$statusBox.Size = New-Object System.Drawing.Size(840, 255)
+$statusBox.Location = New-Object System.Drawing.Point(15, 320)
+$statusBox.Size = New-Object System.Drawing.Size(840, 225)
 $runTab.Controls.Add($statusBox)
 
 $openSummaryButton = New-Button -Text 'Letzte Summary' -X 25 -Y 35 -Width 150
@@ -593,23 +610,31 @@ $taskIncludeEventsBox.Location = New-Object System.Drawing.Point(430, 310)
 $taskIncludeEventsBox.Size = New-Object System.Drawing.Size(230, 24)
 $taskTab.Controls.Add($taskIncludeEventsBox)
 
+$taskTab.Controls.Add((New-Label -Text 'Max Events/Alert' -X 430 -Y 340 -Width 170))
+$taskMaxEventsBox = New-Object System.Windows.Forms.NumericUpDown
+$taskMaxEventsBox.Minimum = 0
+$taskMaxEventsBox.Maximum = 500
+$taskMaxEventsBox.Value = 50
+$taskMaxEventsBox.Location = New-Object System.Drawing.Point(620, 337)
+$taskTab.Controls.Add($taskMaxEventsBox)
+
 $taskAnonymizeBox = New-Object System.Windows.Forms.CheckBox
 $taskAnonymizeBox.Text = 'Benutzer anonymisieren'
 $taskAnonymizeBox.Location = New-Object System.Drawing.Point(665, 310)
 $taskAnonymizeBox.Size = New-Object System.Drawing.Size(190, 24)
 $taskTab.Controls.Add($taskAnonymizeBox)
 
-$task4hPresetButton = New-Button -Text '4h Preset' -X 190 -Y 320 -Width 110 -Height 34
+$task4hPresetButton = New-Button -Text '4h Preset' -X 190 -Y 375 -Width 110 -Height 34
 $taskTab.Controls.Add($task4hPresetButton)
-$task8hPresetButton = New-Button -Text '8h Preset' -X 315 -Y 320 -Width 110 -Height 34
+$task8hPresetButton = New-Button -Text '8h Preset' -X 315 -Y 375 -Width 110 -Height 34
 $taskTab.Controls.Add($task8hPresetButton)
 
-$createTaskButton = New-Button -Text 'Task einrichten' -X 25 -Y 320 -Width 150 -Height 34
+$createTaskButton = New-Button -Text 'Task einrichten' -X 25 -Y 375 -Width 150 -Height 34
 $taskTab.Controls.Add($createTaskButton)
 
 $taskHint = New-Object System.Windows.Forms.Label
 $taskHint.Text = 'Der Task wird fuer den aktuellen Windows-Benutzer mit hoechsten Rechten eingerichtet. Die GUI muss dafuer ggf. als Administrator gestartet werden.'
-$taskHint.Location = New-Object System.Drawing.Point(25, 375)
+$taskHint.Location = New-Object System.Drawing.Point(25, 430)
 $taskHint.Size = New-Object System.Drawing.Size(820, 45)
 $taskTab.Controls.Add($taskHint)
 
@@ -642,6 +667,7 @@ $eightHourPresetButton.Add_Click({
     $runWarningBox.Value = 70
     $runCriticalBox.Value = 90
     $runMaxParallelBox.Value = 4
+    $runMaxEventsBox.Value = 50
     Add-StatusLine '8h Preset gesetzt.'
 })
 $runButton.Add_Click({
@@ -671,6 +697,7 @@ $task4hPresetButton.Add_Click({
     $taskCriticalBox.Value = 90
     $taskMaxParallelBox.Value = 4
     $taskExecutionLimitHoursBox.Value = 6
+    $taskMaxEventsBox.Value = 50
     Add-StatusLine 'Task 4h Preset gesetzt.'
 })
 $task8hPresetButton.Add_Click({
@@ -683,6 +710,7 @@ $task8hPresetButton.Add_Click({
     $taskCriticalBox.Value = 90
     $taskMaxParallelBox.Value = 4
     $taskExecutionLimitHoursBox.Value = 10
+    $taskMaxEventsBox.Value = 50
     Add-StatusLine 'Task 8h Preset gesetzt.'
 })
 $createTaskButton.Add_Click({
@@ -694,7 +722,7 @@ $createTaskButton.Add_Click({
 })
 $openSummaryButton.Add_Click({
     try {
-        $file = Get-LatestFile -Folder (Join-ProjectPath -ChildPath @('output','summary')) -Filter 'summary-*.csv'
+        $file = Get-LatestFile -Folder (Join-ProjectPath -ChildPath @('output','summary')) -Filter 'RunSummary_*.csv'
         if (-not $file) { throw 'Keine Summary-Datei gefunden.' }
         Open-PathWithShell -Path $file.FullName
     }

@@ -11,5 +11,6 @@
   "AnonymizeUsers": false,
   "OutputDelimiter": ";",
   "WinRMTimeoutSeconds": 5,
-  "IncludeDisconnectedSessions": true
+  "IncludeDisconnectedSessions": true,
+  "MaxEventsPerAlert": 50
 }

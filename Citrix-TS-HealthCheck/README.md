@@ -226,3 +226,12 @@ Im Tab **Taskplanung** kann ein geplanter Lauf z. B. fuer morgen 07:00 oder 08:0
 3. **Wiederholen aktivieren** nur setzen, wenn der Task regelmaessig wiederholt werden soll. Ohne Haken wird genau ein geplanter Lauf angelegt.
 4. Optional Eventlog-Kontext oder Benutzer-Anonymisierung aktivieren.
 5. **Task einrichten** klicken. Die GUI sollte dafuer bei Bedarf als Administrator gestartet werden.
+
+## Aktuelle Auswertungshinweise
+
+Die Prozess-CPU wird ab dieser Version mit zwei Feldern ausgegeben:
+
+- `ProcessCpuCorePercent`: CPU-Delta bezogen auf einen logischen Prozessor. `100` entspricht ungefaehr einem voll ausgelasteten logischen Prozessor im Messfenster.
+- `ProcessCpuServerPercent`: CPU-Delta bezogen auf den gesamten Server. Formel: `ProcessCpuCorePercent / LogicalProcessorCount`.
+
+`ServerSamples_YYYY-MM-DD.csv` und `CategorySummary_YYYY-MM-DD.csv` enthalten zusaetzlich `LogicalProcessorCount`, Kategorie-Summen als Server-Prozentwerte und `TopCategoryByCpuServerPercent`. Am Laufende werden `RunSummary_YYYY-MM-DD_HH-mm.csv` und `RunSummary_YYYY-MM-DD_HH-mm.txt` in `output/summary` geschrieben. Das Laufprotokoll liegt in `output/logs/RunLog_YYYY-MM-DD_HH-mm.log`.
