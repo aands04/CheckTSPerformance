@@ -235,3 +235,19 @@ Die Prozess-CPU wird ab dieser Version mit zwei Feldern ausgegeben:
 - `ProcessCpuServerPercent`: CPU-Delta bezogen auf den gesamten Server. Formel: `ProcessCpuCorePercent / LogicalProcessorCount`.
 
 `ServerSamples_YYYY-MM-DD.csv` und `CategorySummary_YYYY-MM-DD.csv` enthalten zusaetzlich `LogicalProcessorCount`, Kategorie-Summen als Server-Prozentwerte und `TopCategoryByCpuServerPercent`. Am Laufende werden `RunSummary_YYYY-MM-DD_HH-mm.csv` und `RunSummary_YYYY-MM-DD_HH-mm.txt` in `output/summary` geschrieben. Das Laufprotokoll liegt in `output/logs/RunLog_YYYY-MM-DD_HH-mm.log`.
+
+### RunId und Laufordner
+
+Jeder Start erzeugt eine eindeutige `RunId` im Format `YYYY-MM-DD_HH-mm-ss`. Diese `RunId` wird in die CSV-Zeilen geschrieben. Zusaetzlich werden die Daten des Laufs nach `output/runs/<RunId>/` geschrieben, damit mehrere Laeufe am gleichen Tag nicht nur ueber Tagesdateien unterschieden werden muessen.
+
+Session-Felder:
+
+- `ActiveSessions`: aktive Benutzersessions aus `quser`.
+- `DisconnectedSessions`: getrennte Benutzersessions aus `quser`.
+- `UserSessionsTotal`: `ActiveSessions + DisconnectedSessions`.
+- `RawSessionCount`: alle sauber aus `quser` erkannten Sessions.
+
+Alert-Felder:
+
+- `ProcessRank`: Rang innerhalb der geloggten Alert-Prozesse nach CPU.
+- `InclusionReason`: `TopCpu`, `ForcedSecurity`, `ForcedNexus`, `ForcedPrinting`, `ForcedCitrixWEM` oder `ForcedMonitoring`.
