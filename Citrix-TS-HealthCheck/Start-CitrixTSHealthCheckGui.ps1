@@ -22,6 +22,7 @@ $script:HealthCheckProcess = $null
 $script:StdOutFile = $null
 $script:StdErrFile = $null
 $script:InvocationPath = $MyInvocation.MyCommand.Path
+$script:GuiClosing = $false
 
 function Resolve-ProjectRoot {
     param([string]$ConfiguredProjectRoot)
@@ -199,7 +200,19 @@ function Open-PathWithShell {
 
 function Add-StatusLine {
     param([Parameter(Mandatory=$true)][string]$Message)
-    $statusBox.AppendText(('{0}  {1}{2}' -f (Get-Date).ToString('HH:mm:ss'), $Message, [Environment]::NewLine))
+    if ($script:GuiClosing) { return }
+    if ($null -eq $statusBox -or $statusBox.IsDisposed -or -not $statusBox.IsHandleCreated) { return }
+    try {
+        $line = '{0}  {1}{2}' -f (Get-Date).ToString('HH:mm:ss'), $Message, [Environment]::NewLine
+        if ($statusBox.InvokeRequired) {
+            [void]$statusBox.BeginInvoke([System.Action[string]]{ param($text) if (-not $statusBox.IsDisposed) { $statusBox.AppendText($text) } }, $line)
+        }
+        else {
+            $statusBox.AppendText($line)
+        }
+    }
+    catch [ObjectDisposedException] { }
+    catch [InvalidOperationException] { }
 }
 
 function Load-GuiData {
@@ -839,7 +852,7 @@ $outputTab.Controls.Add($outputHint)
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 1000
 $timer.Add_Tick({
-    if ($script:HealthCheckProcess -and $script:HealthCheckProcess.HasExited) { Complete-HealthCheckRun }
+    if (-not $script:GuiClosing -and $script:HealthCheckProcess -and $script:HealthCheckProcess.HasExited) { Complete-HealthCheckRun }
 })
 
 $saveButton.Add_Click({
@@ -945,10 +958,16 @@ $form.Add_Shown({
     catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Initialisierung fehlgeschlagen', 'OK', 'Error') | Out-Null }
 })
 $form.Add_FormClosing({
+    $script:GuiClosing = $true
+    if ($timer) { $timer.Stop() }
     if ($script:HealthCheckProcess -and -not $script:HealthCheckProcess.HasExited) {
         $answer = [System.Windows.Forms.MessageBox]::Show('Ein HealthCheck laeuft noch. GUI trotzdem schliessen?', 'Citrix-TS-HealthCheck', 'YesNo', 'Warning')
-        if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { $_.Cancel = $true }
+        if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { $_.Cancel = $true; $script:GuiClosing = $false; if ($timer) { $timer.Start() } }
     }
+})
+$form.Add_FormClosed({
+    $script:GuiClosing = $true
+    if ($timer) { $timer.Stop() }
 })
 
 [void][System.Windows.Forms.Application]::Run($form)
