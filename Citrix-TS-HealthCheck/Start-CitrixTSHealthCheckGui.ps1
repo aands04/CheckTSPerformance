@@ -180,6 +180,12 @@ function Quote-Argument {
     return '"{0}"' -f ($Value -replace '"', '\"')
 }
 
+
+function Quote-ArrayArgument {
+    param([string[]]$Values)
+    return (@($Values) | ForEach-Object { Quote-Argument -Value $_ }) -join ','
+}
+
 function Get-LinesFromTextBox {
     param([System.Windows.Forms.TextBox]$TextBox)
     @($TextBox.Lines | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -302,7 +308,8 @@ function Start-HealthCheckRun {
     if (-not [string]::IsNullOrWhiteSpace($runRunIdBox.Text)) { $arguments += @('-RunId', (Quote-Argument -Value $runRunIdBox.Text)) }
     if ($runTaskInventoryBox.Checked) { $arguments += '-IncludeScheduledTaskInventory' }
     if ($runCylanceBox.Checked) { $arguments += '-IncludeCylanceHealth' }
-    foreach ($taskName in (Get-LinesFromTextBox -TextBox $runTaskNamesBox)) { $arguments += @('-TaskNamesToCheck', (Quote-Argument -Value $taskName)) }
+    $runTaskNames = @(Get-LinesFromTextBox -TextBox $runTaskNamesBox)
+    if ($runTaskNames.Count -gt 0) { $arguments += @('-TaskNamesToCheck', (Quote-ArrayArgument -Values $runTaskNames)) }
     if ($runIncludeEventsBox.Checked) { $arguments += '-IncludeEventContext' }
     if ($runAnonymizeBox.Checked) { $arguments += '-AnonymizeUsers' }
     $arguments = $arguments -join ' '
@@ -352,7 +359,8 @@ function Register-HealthCheckScheduledTask {
     if (-not [string]::IsNullOrWhiteSpace($taskRunIdBox.Text)) { $actionArguments += @('-RunId', (Quote-Argument -Value $taskRunIdBox.Text)) }
     if ($taskTaskInventoryBox.Checked) { $actionArguments += '-IncludeScheduledTaskInventory' }
     if ($taskCylanceBox.Checked) { $actionArguments += '-IncludeCylanceHealth' }
-    foreach ($taskNameToCheck in (Get-LinesFromTextBox -TextBox $taskTaskNamesBox)) { $actionArguments += @('-TaskNamesToCheck', (Quote-Argument -Value $taskNameToCheck)) }
+    $taskNamesToCheck = @(Get-LinesFromTextBox -TextBox $taskTaskNamesBox)
+    if ($taskNamesToCheck.Count -gt 0) { $actionArguments += @('-TaskNamesToCheck', (Quote-ArrayArgument -Values $taskNamesToCheck)) }
     if ($taskIncludeEventsBox.Checked) { $actionArguments += '-IncludeEventContext' }
     if ($taskAnonymizeBox.Checked) { $actionArguments += '-AnonymizeUsers' }
     $actionArguments = $actionArguments -join ' '
