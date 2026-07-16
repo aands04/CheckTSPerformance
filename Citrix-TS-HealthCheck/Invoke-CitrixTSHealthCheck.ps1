@@ -26,6 +26,7 @@ param(
     [double]$CpuWarningThreshold,
     [double]$CpuCriticalThreshold,
     [int]$MaxParallel,
+    [int]$MaxForcedProcessesPerCategory,
     [switch]$IncludeEventLogContext,
     [switch]$IncludeEventContext,
     [switch]$AnonymizeUsers,
@@ -65,6 +66,7 @@ function New-DefaultSettings {
         CpuWarningThreshold = 70
         CpuCriticalThreshold = 90
         MaxParallel = 4
+        MaxForcedProcessesPerCategory = 10
         IncludeEventLogContext = $false
         IncludeEventContext = $false
         AnonymizeUsers = $false
@@ -101,6 +103,7 @@ function Merge-ParameterSettings {
     if ($PSBoundParameters.ContainsKey('CpuWarningThreshold')) { $Settings.CpuWarningThreshold = $CpuWarningThreshold }
     if ($PSBoundParameters.ContainsKey('CpuCriticalThreshold')) { $Settings.CpuCriticalThreshold = $CpuCriticalThreshold }
     if ($PSBoundParameters.ContainsKey('MaxParallel')) { $Settings.MaxParallel = $MaxParallel }
+    if ($PSBoundParameters.ContainsKey('MaxForcedProcessesPerCategory')) { $Settings.MaxForcedProcessesPerCategory = $MaxForcedProcessesPerCategory }
     if ($PSBoundParameters.ContainsKey('Delimiter')) { $Settings.OutputDelimiter = $Delimiter }
     if ($PSBoundParameters.ContainsKey('IncludeEventLogContext')) { $Settings.IncludeEventLogContext = [bool]$IncludeEventLogContext }
     if ($PSBoundParameters.ContainsKey('IncludeEventContext')) { $Settings.IncludeEventLogContext = [bool]$IncludeEventContext; $Settings.IncludeEventContext = [bool]$IncludeEventContext }
@@ -158,7 +161,7 @@ function Write-RunLog {
 
 function Get-RemoteSamplerScriptBlock {
     {
-        param($CpuSampleSeconds, $TopProcessCount, $AlertTopProcessCount, $CpuWarningThreshold, $CpuCriticalThreshold, $IncludeEventLogContext, $AnonymizeUsers, $MaxEventsPerAlert)
+        param($CpuSampleSeconds, $TopProcessCount, $AlertTopProcessCount, $CpuWarningThreshold, $CpuCriticalThreshold, $IncludeEventLogContext, $AnonymizeUsers, $MaxEventsPerAlert, $MaxForcedProcessesPerCategory)
 
         function Get-ProcessCategory {
             param([string]$Name, [string]$ParentProcessName = '', [string]$Path = '', [string]$CommandLine = '')
@@ -303,24 +306,44 @@ function Get-RemoteSamplerScriptBlock {
 
         $isWarning = $cpuPercent -ge $CpuWarningThreshold
         $isCritical = $cpuPercent -ge $CpuCriticalThreshold
-        $topLimit = if ($isWarning) { $AlertTopProcessCount } else { $TopProcessCount }
-        $specialNames = @('MsMpEng','MsSense','SenseNdr','CylanceSvc','Citrix.Wem.Agent.Service','VUEMUIAgent','nexus.framework.healthcare','mc','msedge','msedgewebview2','Acrobat','AcroCEF','OUTLOOK','EXCEL','spoolsv','WmiPrvSE','wsmprovhost')
-        $selectedIds = @{}
+        $coreForcedNames = @('MsMpEng','MsSense','CylanceSvc','Citrix.Wem.Agent.Service','VUEMUIAgent')
+        $forcedProcessRules = @(
+            [pscustomobject]@{ Category='Security'; Reason='ForcedSecurity'; Names=@('MsMpEng','MsSense','SenseNdr','CylanceSvc') },
+            [pscustomobject]@{ Category='Wem'; Reason='ForcedWEM'; Names=@('Citrix.Wem.Agent.Service','VUEMUIAgent') },
+            [pscustomobject]@{ Category='Citrix'; Reason='ForcedCitrix'; Names=@('BrokerAgent','ctxsvc','UserProfileManager') },
+            [pscustomobject]@{ Category='Nexus'; Reason='ForcedNexus'; Names=@('nexus.framework.healthcare','mc','anm_neu') },
+            [pscustomobject]@{ Category='Adobe'; Reason='ForcedAdobe'; Names=@('Acrobat','AcroCEF') },
+            [pscustomobject]@{ Category='Edge'; Reason='ForcedEdge'; Names=@('msedge','msedgewebview2') },
+            [pscustomobject]@{ Category='Office'; Reason='ForcedOffice'; Names=@('OUTLOOK','EXCEL') },
+            [pscustomobject]@{ Category='Printing'; Reason='ForcedPrinting'; Names=@('spoolsv') },
+            [pscustomobject]@{ Category='Monitoring'; Reason='ForcedMonitoring'; Names=@('WmiPrvSE','wsmprovhost') }
+        )
+        $rawIds = @{}
+        $alertIds = @{}
         $inclusionReasons = @{}
-        foreach ($p in ($processDeltas | Sort-Object ProcessCpuCorePercent -Descending | Select-Object -First $topLimit)) { $selectedIds[$p.ProcessId] = $true; $inclusionReasons[$p.ProcessId] = 'TopCpu' }
+        foreach ($p in ($processDeltas | Sort-Object ProcessCpuCorePercent -Descending | Select-Object -First $TopProcessCount)) {
+            $rawIds[$p.ProcessId] = $true
+            if (-not $inclusionReasons.ContainsKey($p.ProcessId)) { $inclusionReasons[$p.ProcessId] = 'TopCpu' }
+        }
         if ($isWarning) {
-            foreach ($p in $processDeltas) {
-                $reason = $null
-                if ($p.Category -eq 'Security') { $reason = 'ForcedSecurity' }
-                elseif ($p.Category -eq 'Nexus') { $reason = 'ForcedNexus' }
-                elseif ($p.Category -eq 'Printing') { $reason = 'ForcedPrinting' }
-                elseif ($p.Category -eq 'Wem' -or $p.ProcessName -in @('Citrix.Wem.Agent.Service','VUEMUIAgent')) { $reason = 'ForcedWEM' }
-                elseif ($p.Category -eq 'Citrix') { $reason = 'ForcedCitrix' }
-                elseif ($p.Category -eq 'Adobe') { $reason = 'ForcedAdobe' }
-                elseif ($p.Category -eq 'Monitoring' -or $p.ProcessName -in @('WmiPrvSE','wsmprovhost')) { $reason = 'ForcedMonitoring' }
-                if ($reason) { $selectedIds[$p.ProcessId] = $true; if (-not $inclusionReasons.ContainsKey($p.ProcessId)) { $inclusionReasons[$p.ProcessId] = $reason } }
+            foreach ($p in ($processDeltas | Sort-Object ProcessCpuCorePercent -Descending | Select-Object -First $AlertTopProcessCount)) {
+                $alertIds[$p.ProcessId] = $true
+                $inclusionReasons[$p.ProcessId] = 'TopCpu'
+            }
+            foreach ($rule in $forcedProcessRules) {
+                $forcedCount = 0
+                foreach ($p in ($processDeltas | Where-Object { $_.ProcessName -in $rule.Names } | Sort-Object ProcessCpuCorePercent -Descending)) {
+                    if ($forcedCount -ge [int]$MaxForcedProcessesPerCategory) { break }
+                    if (($p.ProcessCpuCorePercent -le 0) -and -not ($p.ProcessName -in $coreForcedNames)) { continue }
+                    $alertIds[$p.ProcessId] = $true
+                    if (-not $inclusionReasons.ContainsKey($p.ProcessId) -or $inclusionReasons[$p.ProcessId] -eq 'TopCpu') { $inclusionReasons[$p.ProcessId] = $rule.Reason }
+                    $forcedCount++
+                }
             }
         }
+        $selectedIds = @{}
+        foreach ($id in $rawIds.Keys) { $selectedIds[$id] = $true }
+        foreach ($id in $alertIds.Keys) { $selectedIds[$id] = $true }
         $selected = @($processDeltas | Where-Object { $selectedIds.ContainsKey($_.ProcessId) } | Sort-Object ProcessCpuCorePercent -Descending)
 
         $cimByPid = @{}
@@ -354,6 +377,8 @@ function Get-RemoteSamplerScriptBlock {
                 ProcessName = $p.ProcessName
                 ProcessRank = 0
                 InclusionReason = $inclusionReasons[$p.ProcessId]
+                IsRawSample = $rawIds.ContainsKey($p.ProcessId)
+                IsAlertSample = $alertIds.ContainsKey($p.ProcessId)
                 ProcessId = $p.ProcessId
                 ProcessSessionId = $p.SessionId
                 ProcessUserName = $ownerUser
@@ -414,8 +439,8 @@ function Get-RemoteSamplerScriptBlock {
                 IsCpuCritical = $isCritical
                 AlertSeverity = if ($isCritical) { 'Critical' } elseif ($isWarning) { 'Warning' } else { 'OK' }
                 TopCategoryByCpuServerPercent = $topCategoryByServer
-                TopProcessCpuCorePercentSum = [Math]::Round((($selected | Measure-Object -Property ProcessCpuCorePercent -Sum).Sum), 2)
-                TopProcessCpuServerPercentSum = [Math]::Round((($selected | Measure-Object -Property ProcessCpuServerPercent -Sum).Sum), 2)
+                TopProcessCpuCorePercentSum = [Math]::Round(((@($processDeltas | Sort-Object ProcessCpuCorePercent -Descending | Select-Object -First $TopProcessCount) | Measure-Object -Property ProcessCpuCorePercent -Sum).Sum), 2)
+                TopProcessCpuServerPercentSum = [Math]::Round(((@($processDeltas | Sort-Object ProcessCpuCorePercent -Descending | Select-Object -First $TopProcessCount) | Measure-Object -Property ProcessCpuServerPercent -Sum).Sum), 2)
             }
             ProcessSamples = @($processSamples)
             CategorySummary = [pscustomobject]@{
@@ -453,7 +478,7 @@ function Invoke-ServerCollectionRound {
             try {
                 Test-WSMan -ComputerName $Server -ErrorAction Stop | Out-Null
                 $remoteBlock = [scriptblock]::Create($RemoteScript)
-                $result = Invoke-Command -ComputerName $Server -ScriptBlock $remoteBlock -ArgumentList $SettingsHash.CpuSampleSeconds, $SettingsHash.TopProcessCount, $SettingsHash.AlertTopProcessCount, $SettingsHash.CpuWarningThreshold, $SettingsHash.CpuCriticalThreshold, $SettingsHash.IncludeEventLogContext, $SettingsHash.AnonymizeUsers, $SettingsHash.MaxEventsPerAlert -ErrorAction Stop
+                $result = Invoke-Command -ComputerName $Server -ScriptBlock $remoteBlock -ArgumentList $SettingsHash.CpuSampleSeconds, $SettingsHash.TopProcessCount, $SettingsHash.AlertTopProcessCount, $SettingsHash.CpuWarningThreshold, $SettingsHash.CpuCriticalThreshold, $SettingsHash.IncludeEventLogContext, $SettingsHash.AnonymizeUsers, $SettingsHash.MaxEventsPerAlert, $SettingsHash.MaxForcedProcessesPerCategory -ErrorAction Stop
                 [pscustomobject]@{ TargetServer = $Server; Status = 'OK'; Result = $result; ErrorMessage = '' }
             }
             catch {
@@ -508,19 +533,59 @@ function Invoke-CylanceHealthCollection {
         try {
             $rows += Invoke-Command -ComputerName $server -ScriptBlock {
                 param($RunId)
+                function Get-FirstJsonValue {
+                    param($Object, [string[]]$Names)
+                    if ($null -eq $Object) { return '' }
+                    foreach ($name in $Names) {
+                        foreach ($property in $Object.PSObject.Properties) {
+                            if ($property.Name -ieq $name -and $null -ne $property.Value -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) { return [string]$property.Value }
+                        }
+                    }
+                    foreach ($property in $Object.PSObject.Properties) {
+                        if ($property.Value -is [pscustomobject]) {
+                            $nested = Get-FirstJsonValue -Object $property.Value -Names $Names
+                            if ($nested) { return $nested }
+                        }
+                    }
+                    return ''
+                }
+                function Test-RegistryPropertyExists {
+                    param([string[]]$Paths, [string[]]$Names)
+                    foreach ($path in $Paths) {
+                        try {
+                            $item = Get-ItemProperty -LiteralPath $path -ErrorAction Stop
+                            foreach ($name in $Names) { if ($item.PSObject.Properties.Name -contains $name) { return $true } }
+                        } catch { }
+                    }
+                    return $false
+                }
                 $statusPath = 'C:\ProgramData\Cylance\Status\Status.json'
-                $status = $null
+                $statusJson = $null
                 $errorMessage = ''
-                try { if (Test-Path -LiteralPath $statusPath) { $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json } } catch { $errorMessage = $_.Exception.Message }
+                try { if (Test-Path -LiteralPath $statusPath) { $statusJson = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json } else { $errorMessage = 'Status.json nicht gefunden.' } } catch { $errorMessage = $_.Exception.Message }
                 $svc = Get-Service -Name CylanceSvc -ErrorAction SilentlyContinue
                 $protection = ''
                 try { $protection = (& sc.exe qprotection CylanceSvc 2>$null | Out-String).Trim() } catch { }
+                $deviceName = Get-FirstJsonValue -Object $statusJson -Names @('StatusDeviceName','DeviceName','device_name','deviceName','HostName','hostname','ComputerName')
+                $serial = Get-FirstJsonValue -Object $statusJson -Names @('SerialNumber','serial_number','serialNumber','AgentId','AgentID','DeviceId','device_id')
+                $agentVersion = Get-FirstJsonValue -Object $statusJson -Names @('AgentVersion','agent_version','agentVersion','ProductVersion','Version')
+                $policyName = Get-FirstJsonValue -Object $statusJson -Names @('PolicyName','policy_name','policyName','Policy')
+                $lastCommunicated = Get-FirstJsonValue -Object $statusJson -Names @('LastCommunicated','last_communicated','lastCommunicated','LastCheckIn')
+                $lastBackgroundScan = Get-FirstJsonValue -Object $statusJson -Names @('LastBackgroundScan','last_background_scan','lastBackgroundScan')
+                $drivesScanned = Get-FirstJsonValue -Object $statusJson -Names @('DrivesScanned','drives_scanned','drivesScanned')
+                $threatCount = Get-FirstJsonValue -Object $statusJson -Names @('ThreatCount','threat_count','threatCount')
+                $registryPaths = @('HKLM:\SOFTWARE\Cylance\Desktop','HKLM:\SOFTWARE\WOW6432Node\Cylance\Desktop')
+                $fpExists = (Test-RegistryPropertyExists -Paths $registryPaths -Names @('FP','FPExists')) -or (Test-Path 'C:\ProgramData\Cylance\Desktop\config_defaults.xml')
+                $fpMaskExists = (Test-RegistryPropertyExists -Paths $registryPaths -Names @('FPMask','FP_Mask','FPMaskExists')) -or (Test-Path 'C:\ProgramData\Cylance\Desktop\fp.mask')
+                $fpVersionExists = (Test-RegistryPropertyExists -Paths $registryPaths -Names @('FPVersion','FP_Version','FPVersionExists')) -or (Test-Path 'C:\ProgramData\Cylance\Desktop\fp.version')
+                $rowStatus = if ($errorMessage) { 'ERROR' } elseif ([string]::IsNullOrWhiteSpace($deviceName) -or [string]::IsNullOrWhiteSpace($serial)) { 'PARTIAL' } else { 'OK' }
+                $rowError = if ($rowStatus -eq 'PARTIAL') { 'Identitaetsfelder fehlen oder konnten nicht aus Status.json gelesen werden.' } else { $errorMessage }
                 [pscustomobject]@{
                     RunId=$RunId; Server=$env:COMPUTERNAME; ServiceStatus=if($svc){$svc.Status}else{'NOT_FOUND'}; ServiceCanStop=if($svc){$svc.CanStop}else{''}; ServiceProtection=$protection;
-                    StatusDeviceName=if($status){$status.device_name}else{''}; SerialNumber=if($status){$status.serial_number}else{''}; AgentVersion=if($status){$status.agent_version}else{''}; PolicyName=if($status){$status.policy_name}else{''};
-                    LastCommunicated=if($status){$status.last_communicated}else{''}; LastBackgroundScan=if($status){$status.last_background_scan}else{''}; DrivesScanned=if($status){$status.drives_scanned}else{''}; ThreatCount=if($status){$status.threat_count}else{''};
-                    FPExists=(Test-Path 'C:\ProgramData\Cylance\Desktop\config_defaults.xml'); FPMaskExists=(Test-Path 'C:\ProgramData\Cylance\Desktop\fp.mask'); FPVersionExists=(Test-Path 'C:\ProgramData\Cylance\Desktop\fp.version');
-                    Status=if($errorMessage){'ERROR'}else{'OK'}; ErrorMessage=$errorMessage
+                    StatusDeviceName=$deviceName; SerialNumber=$serial; AgentVersion=$agentVersion; PolicyName=$policyName;
+                    LastCommunicated=$lastCommunicated; LastBackgroundScan=$lastBackgroundScan; DrivesScanned=$drivesScanned; ThreatCount=$threatCount;
+                    FPExists=$fpExists; FPMaskExists=$fpMaskExists; FPVersionExists=$fpVersionExists;
+                    Status=$rowStatus; ErrorMessage=$rowError
                 }
             } -ArgumentList $RunId -ErrorAction Stop
         }
@@ -533,7 +598,12 @@ function New-CylanceDuplicateRows {
     param([array]$Rows, [string]$RunId)
     $dupes = @()
     foreach ($field in @('SerialNumber','StatusDeviceName')) {
-        $dupes += $Rows | Where-Object { $_.$field } | Group-Object $field | Where-Object Count -gt 1 | ForEach-Object { [pscustomobject]@{ RunId=$RunId; DuplicateField=$field; DuplicateValue=$_.Name; Servers=(($_.Group | ForEach-Object Server) -join ',') } }
+        $readRows = @($Rows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.$field) })
+        if ($readRows.Count -eq 0) {
+            $dupes += [pscustomobject]@{ RunId=$RunId; DuplicateField=$field; DuplicateValue=''; Servers=''; Status='NOT_EVALUATED'; ErrorMessage="Keine Werte fuer $field gelesen; Duplikatpruefung nicht aussagekraeftig." }
+            continue
+        }
+        $dupes += $readRows | Group-Object $field | Where-Object Count -gt 1 | ForEach-Object { [pscustomobject]@{ RunId=$RunId; DuplicateField=$field; DuplicateValue=$_.Name; Servers=(($_.Group | ForEach-Object Server) -join ','); Status='DUPLICATE'; ErrorMessage='' } }
     }
     return $dupes
 }
@@ -545,6 +615,18 @@ function New-ErrorServerSample {
         ActiveSessions = ''; DisconnectedSessions = ''; UserSessionsTotal = ''; RawSessionCount = ''; TotalSessions = ''; Status = 'ERROR'; ErrorMessage = $Message; IsCpuWarning = $false; IsCpuCritical = $false; AlertSeverity = 'Error';
         TopCategoryByCpuServerPercent = ''; SecurityCpuServerPercent = ''; NexusCpuServerPercent = ''; OfficeCpuServerPercent = ''; BrowserCpuServerPercent = ''; AdobeCpuServerPercent = ''; EdgeCpuServerPercent = ''; CitrixCpuServerPercent = ''; WemCpuServerPercent = ''; PrintingCpuServerPercent = ''; MonitoringCpuServerPercent = ''; WindowsCpuServerPercent = ''; OtherCpuServerPercent = ''
     }
+}
+
+
+function Get-SumValue {
+    param([array]$Rows, [string]$PropertyName)
+    $sum = 0.0
+    foreach ($row in @($Rows)) {
+        if ($null -ne $row -and ($row.PSObject.Properties.Name -contains $PropertyName) -and $row.$PropertyName -ne '') {
+            try { $sum += [double]$row.$PropertyName } catch { }
+        }
+    }
+    return $sum
 }
 
 function Get-PercentileValue {
@@ -559,7 +641,7 @@ function Get-PercentileValue {
 function Join-TopCpuGroups {
     param([array]$Rows, [string]$GroupProperty, [int]$Count = 10)
     @($Rows | Group-Object $GroupProperty | ForEach-Object {
-        [pscustomobject]@{ Name = $_.Name; Cpu = (($_.Group | Measure-Object ProcessCpuServerPercent -Sum).Sum) }
+        [pscustomobject]@{ Name = $_.Name; Cpu = (Get-SumValue -Rows $_.Group -PropertyName 'ProcessCpuServerPercent') }
     } | Sort-Object Cpu -Descending | Select-Object -First $Count | ForEach-Object { '{0}={1:n2}' -f $_.Name,$_.Cpu }) -join ', '
 }
 
@@ -580,7 +662,7 @@ function New-CategoryAggregateRows {
             TargetServer = $server
             Category = $category
             Samples = $rows.Count
-            CpuCoreSecondsSum = [Math]::Round((($rows | Measure-Object ProcessCpuSecondsDelta -Sum).Sum), 3)
+            CpuCoreSecondsSum = [Math]::Round((Get-SumValue -Rows $rows -PropertyName 'ProcessCpuSecondsDelta'), 3)
             AvgCpuCorePercent = [Math]::Round((($coreValues | Measure-Object -Average).Average), 2)
             MaxCpuCorePercent = [Math]::Round((($coreValues | Measure-Object -Maximum).Maximum), 2)
             AvgCpuServerPercent = [Math]::Round((($serverValues | Measure-Object -Average).Average), 2)
@@ -610,7 +692,7 @@ function New-RunSummaryRows {
         $top10Proc = Join-TopCpuGroups -Rows $serverProcessRows -GroupProperty ProcessName -Count 10
         $topCat = Join-TopCpuGroups -Rows $serverProcessRows -GroupProperty Category -Count 1
         $categoryTotals = @{}
-        foreach ($category in $categoryNames) { $categoryTotals[$category] = (($serverProcessRows | Where-Object Category -eq $category | Measure-Object ProcessCpuServerPercent -Sum).Sum) }
+        foreach ($category in $categoryNames) { $categoryTotals[$category] = (Get-SumValue -Rows @($serverProcessRows | Where-Object Category -eq $category) -PropertyName 'ProcessCpuServerPercent') }
         [pscustomobject]@{
             RunId = $runId; StartTime = $Start.ToString('s'); EndTime = $End.ToString('s'); IntervalSeconds = $settings.IntervalSeconds; CpuSampleSeconds = $settings.CpuSampleSeconds; ServerList = ($servers -join ','); ImageVersion = $settings.ImageVersion; Notes = $settings.Notes; ScriptVersion = '1.0.0'; OutputPath = $OutputPath; RunStart = $Start.ToString('s'); RunEnd = $End.ToString('s'); DurationMinutes = [Math]::Round(($End-$Start).TotalMinutes, 2); ServerCount = $ServerCount; TargetServer = $server;
             SampleCount = $okRows.Count; ErrorCount = @($group.Group | Where-Object Status -eq 'ERROR').Count;
@@ -716,22 +798,24 @@ try {
             $serverRows += $serverRow
             $rank = 1
             $rankByProcessId = @{}
-            foreach ($p in @($item.Result.ProcessSamples | Sort-Object ProcessCpuCorePercent -Descending)) {
-                $rankByProcessId[$p.ProcessId] = $rank
+            foreach ($rankedProcess in @($item.Result.ProcessSamples | Sort-Object ProcessCpuCorePercent -Descending)) {
+                $rankByProcessId[$rankedProcess.ProcessId] = $rank
+                $rank++
+            }
+            foreach ($p in @($item.Result.ProcessSamples | Where-Object { $_.IsRawSample } | Sort-Object ProcessCpuCorePercent -Descending)) {
                 $processRows += [pscustomobject]@{
                     RunId=$runId; Timestamp=$serverSample.Timestamp; Server=$item.TargetServer; TargetServer=$item.TargetServer; ComputerName=$serverSample.ComputerName; LogicalProcessorCount=$serverSample.LogicalProcessorCount; CpuPercent=$serverSample.CpuPercent; MemoryPercent=$serverSample.MemoryPercent; ActiveSessions=$serverSample.ActiveSessions; DisconnectedSessions=$serverSample.DisconnectedSessions;
-                    ProcessRank=$rank; InclusionReason=$p.InclusionReason; ProcessId=$p.ProcessId; ParentProcessId=$p.ParentProcessId; ParentProcessName=$p.ParentProcessName; ProcessName=$p.ProcessName; ProcessSessionId=$p.ProcessSessionId; ProcessUserName=$p.ProcessUserName; ProcessUserDomain=$p.ProcessUserDomain; SessionState=$p.SessionState;
+                    ProcessRank=$rankByProcessId[$p.ProcessId]; InclusionReason=$p.InclusionReason; ProcessId=$p.ProcessId; ParentProcessId=$p.ParentProcessId; ParentProcessName=$p.ParentProcessName; ProcessName=$p.ProcessName; ProcessSessionId=$p.ProcessSessionId; ProcessUserName=$p.ProcessUserName; ProcessUserDomain=$p.ProcessUserDomain; SessionState=$p.SessionState;
                     ProcessCpuCorePercent=$p.ProcessCpuCorePercent; ProcessCpuServerPercent=$p.ProcessCpuServerPercent; ProcessCpuSecondsDelta=$p.ProcessCpuSecondsDelta; ProcessWorkingSetMB=$p.ProcessWorkingSetMB; ProcessPrivateMemoryMB=$p.ProcessPrivateMemoryMB; ProcessPath=$p.ProcessPath; ProcessCommandLine=$p.ProcessCommandLine; ProcessStartTime=$p.ProcessStartTime;
                     Category=$p.Category; IsSystemProcess=$p.IsSystemProcess; IsUserProcess=$p.IsUserProcess; IsMonitoringRelated=$p.IsMonitoringRelated; Status='OK'; ErrorMessage=''
                 }
-                $rank++
             }
             $categoryRows += [pscustomobject]@{
                 RunId=$runId; Timestamp=$serverSample.Timestamp; Server=$item.TargetServer; TargetServer=$item.TargetServer; ComputerName=$serverSample.ComputerName; LogicalProcessorCount=$serverSample.LogicalProcessorCount; CpuPercent=$serverSample.CpuPercent; ActiveSessions=$serverSample.ActiveSessions; DisconnectedSessions=$serverSample.DisconnectedSessions; UserSessionsTotal=$serverSample.UserSessionsTotal; RawSessionCount=$serverSample.RawSessionCount; TotalSessionsRaw=$serverSample.RawSessionCount; TotalSessions=$serverSample.TotalSessions;
                 SecurityCpuCorePercent=$cat.SecurityCpuCorePercent; SecurityCpuServerPercent=$cat.SecurityCpuServerPercent; NexusCpuCorePercent=$cat.NexusCpuCorePercent; NexusCpuServerPercent=$cat.NexusCpuServerPercent; OfficeCpuCorePercent=$cat.OfficeCpuCorePercent; OfficeCpuServerPercent=$cat.OfficeCpuServerPercent; BrowserCpuCorePercent=$cat.BrowserCpuCorePercent; BrowserCpuServerPercent=$cat.BrowserCpuServerPercent; AdobeCpuCorePercent=$cat.AdobeCpuCorePercent; AdobeCpuServerPercent=$cat.AdobeCpuServerPercent; EdgeCpuCorePercent=$cat.EdgeCpuCorePercent; EdgeCpuServerPercent=$cat.EdgeCpuServerPercent; CitrixCpuCorePercent=$cat.CitrixCpuCorePercent; CitrixCpuServerPercent=$cat.CitrixCpuServerPercent; WemCpuCorePercent=$cat.WemCpuCorePercent; WemCpuServerPercent=$cat.WemCpuServerPercent; PrintingCpuCorePercent=$cat.PrintingCpuCorePercent; PrintingCpuServerPercent=$cat.PrintingCpuServerPercent; MonitoringCpuCorePercent=$cat.MonitoringCpuCorePercent; MonitoringCpuServerPercent=$cat.MonitoringCpuServerPercent; WindowsCpuCorePercent=$cat.WindowsCpuCorePercent; WindowsCpuServerPercent=$cat.WindowsCpuServerPercent; OtherCpuCorePercent=$cat.OtherCpuCorePercent; OtherCpuServerPercent=$cat.OtherCpuServerPercent; TopCategoryByCpuServerPercent=$cat.TopCategoryByCpuServerPercent
             }
             if ($serverSample.IsCpuWarning) {
-                foreach ($p in @($item.Result.ProcessSamples)) {
+                foreach ($p in @($item.Result.ProcessSamples | Where-Object { $_.IsAlertSample })) {
                     $alertId = '{0}_{1}_{2}' -f $runId, ($item.TargetServer -replace '[^A-Za-z0-9_.-]', '_'), ($serverSample.Timestamp -replace '[:]', '')
                     $alertRows += [pscustomobject]@{
                         AlertId=$alertId; RunId=$runId; Timestamp=$serverSample.Timestamp; Server=$item.TargetServer; TargetServer=$item.TargetServer; ComputerName=$serverSample.ComputerName; LogicalProcessorCount=$serverSample.LogicalProcessorCount; AlertSeverity=$serverSample.AlertSeverity; AlertTopCategory=$cat.TopCategoryByCpuServerPercent; CpuTotalPercent=$serverSample.CpuPercent; CpuPercent=$serverSample.CpuPercent; MemoryPercent=$serverSample.MemoryPercent; ActiveSessions=$serverSample.ActiveSessions; DisconnectedSessions=$serverSample.DisconnectedSessions; UserSessionsTotal=$serverSample.UserSessionsTotal; RawSessionCount=$serverSample.RawSessionCount; TotalSessionsRaw=$serverSample.RawSessionCount; TotalSessions=$serverSample.TotalSessions;
