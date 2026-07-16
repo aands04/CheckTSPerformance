@@ -99,6 +99,17 @@ function Read-SettingsFile {
     return Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
+
+function Get-SettingValue {
+    param($Settings, [string]$Name, $DefaultValue)
+    if ($null -eq $Settings) { return $DefaultValue }
+    if ($Settings.PSObject.Properties.Name -contains $Name) {
+        $value = $Settings.$Name
+        if ($null -ne $value) { return $value }
+    }
+    return $DefaultValue
+}
+
 function Save-SettingsFile {
     param(
         [int]$CpuSampleSeconds,
@@ -127,7 +138,9 @@ function Save-SettingsFile {
     $settingsPath = Join-ProjectPath -ChildPath @('config','settings.json')
     $existing = $null
     if (Test-Path -LiteralPath $settingsPath) { try { $existing = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $existing = $null } }
-    $taskNames = if ($TaskNamesToCheck -and $TaskNamesToCheck.Count -gt 0) { @($TaskNamesToCheck) } elseif ($existing -and $existing.TaskNamesToCheck) { @($existing.TaskNamesToCheck) } else { @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload') }
+    $defaultTaskNames = @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload')
+    $existingTaskNames = @(Get-SettingValue -Settings $existing -Name 'TaskNamesToCheck' -DefaultValue $defaultTaskNames)
+    $taskNames = if ($TaskNamesToCheck -and $TaskNamesToCheck.Count -gt 0) { @($TaskNamesToCheck) } elseif ($existingTaskNames -and $existingTaskNames.Count -gt 0) { @($existingTaskNames) } else { $defaultTaskNames }
     $settings = [ordered]@{
         DurationMinutes = $DurationMinutes
         IntervalSeconds = $IntervalSeconds
@@ -189,38 +202,38 @@ function Load-GuiData {
         $serversBox.Text = [string]::Join([Environment]::NewLine, (Get-Content -LiteralPath $serversPath -Encoding UTF8))
     }
     $settings = Read-SettingsFile
-    $cpuSampleBox.Value = [decimal]$settings.CpuSampleSeconds
-    $topProcessBox.Value = [decimal]$settings.TopProcessCount
-    $winRmTimeoutBox.Value = [decimal]$settings.WinRMTimeoutSeconds
-    $delimiterBox.Text = [string]$settings.OutputDelimiter
-    $includeDisconnectedBox.Checked = [bool]$settings.IncludeDisconnectedSessions
+    $cpuSampleBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'CpuSampleSeconds' -DefaultValue 5)
+    $topProcessBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'TopProcessCount' -DefaultValue 10)
+    $winRmTimeoutBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'WinRMTimeoutSeconds' -DefaultValue 5)
+    $delimiterBox.Text = [string](Get-SettingValue -Settings $settings -Name 'OutputDelimiter' -DefaultValue ';')
+    $includeDisconnectedBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeDisconnectedSessions' -DefaultValue $true)
     if ($outputPathBox -and [string]::IsNullOrWhiteSpace($outputPathBox.Text)) { $outputPathBox.Text = [IO.Path]::Combine($ProjectRoot, 'output') }
-    if ($manualDurationBox) { $manualDurationBox.Value = [decimal]$settings.DurationMinutes }
-    if ($manualIntervalBox) { $manualIntervalBox.Value = [decimal]$settings.IntervalSeconds }
-    if ($runCpuSampleBox) { $runCpuSampleBox.Value = [decimal]$settings.CpuSampleSeconds }
-    if ($runTopProcessBox) { $runTopProcessBox.Value = [decimal]$settings.TopProcessCount }
-    if ($runAlertTopProcessBox) { $runAlertTopProcessBox.Value = [decimal]$settings.AlertTopProcessCount }
-    if ($runWarningBox) { $runWarningBox.Value = [decimal]$settings.CpuWarningThreshold }
-    if ($runCriticalBox) { $runCriticalBox.Value = [decimal]$settings.CpuCriticalThreshold }
-    if ($runMaxParallelBox) { $runMaxParallelBox.Value = [decimal]$settings.MaxParallel }
-    if ($runIncludeEventsBox) { $runIncludeEventsBox.Checked = [bool]$settings.IncludeEventLogContext }
-    if ($runMaxEventsBox) { $runMaxEventsBox.Value = [decimal]$settings.MaxEventsPerAlert }
-    if ($runAnonymizeBox) { $runAnonymizeBox.Checked = [bool]$settings.AnonymizeUsers }
-    if ($runImageVersionBox) { $runImageVersionBox.Text = [string]$settings.ImageVersion }
-    if ($runNotesBox) { $runNotesBox.Text = [string]$settings.Notes }
-    if ($runRunIdBox) { $runRunIdBox.Text = [string]$settings.RunId }
-    if ($runTaskInventoryBox) { $runTaskInventoryBox.Checked = [bool]$settings.IncludeScheduledTaskInventory }
-    if ($runCylanceBox) { $runCylanceBox.Checked = [bool]$settings.IncludeCylanceHealth }
-    if ($runTaskNamesBox) { $runTaskNamesBox.Text = [string]::Join([Environment]::NewLine, @($settings.TaskNamesToCheck)) }
-    if ($taskImageVersionBox) { $taskImageVersionBox.Text = [string]$settings.ImageVersion }
-    if ($taskNotesBox) { $taskNotesBox.Text = [string]$settings.Notes }
-    if ($taskRunIdBox) { $taskRunIdBox.Text = [string]$settings.RunId }
-    if ($taskIncludeEventsBox) { $taskIncludeEventsBox.Checked = [bool]$settings.IncludeEventLogContext }
-    if ($taskMaxEventsBox) { $taskMaxEventsBox.Value = [decimal]$settings.MaxEventsPerAlert }
-    if ($taskAnonymizeBox) { $taskAnonymizeBox.Checked = [bool]$settings.AnonymizeUsers }
-    if ($taskTaskInventoryBox) { $taskTaskInventoryBox.Checked = [bool]$settings.IncludeScheduledTaskInventory }
-    if ($taskCylanceBox) { $taskCylanceBox.Checked = [bool]$settings.IncludeCylanceHealth }
-    if ($taskTaskNamesBox) { $taskTaskNamesBox.Text = [string]::Join([Environment]::NewLine, @($settings.TaskNamesToCheck)) }
+    if ($manualDurationBox) { $manualDurationBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'DurationMinutes' -DefaultValue 480) }
+    if ($manualIntervalBox) { $manualIntervalBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'IntervalSeconds' -DefaultValue 300) }
+    if ($runCpuSampleBox) { $runCpuSampleBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'CpuSampleSeconds' -DefaultValue 5) }
+    if ($runTopProcessBox) { $runTopProcessBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'TopProcessCount' -DefaultValue 10) }
+    if ($runAlertTopProcessBox) { $runAlertTopProcessBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'AlertTopProcessCount' -DefaultValue 25) }
+    if ($runWarningBox) { $runWarningBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'CpuWarningThreshold' -DefaultValue 70) }
+    if ($runCriticalBox) { $runCriticalBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'CpuCriticalThreshold' -DefaultValue 90) }
+    if ($runMaxParallelBox) { $runMaxParallelBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxParallel' -DefaultValue 4) }
+    if ($runIncludeEventsBox) { $runIncludeEventsBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeEventLogContext' -DefaultValue (Get-SettingValue -Settings $settings -Name 'IncludeEventContext' -DefaultValue $false)) }
+    if ($runMaxEventsBox) { $runMaxEventsBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxEventsPerAlert' -DefaultValue 50) }
+    if ($runAnonymizeBox) { $runAnonymizeBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'AnonymizeUsers' -DefaultValue $false) }
+    if ($runImageVersionBox) { $runImageVersionBox.Text = [string](Get-SettingValue -Settings $settings -Name 'ImageVersion' -DefaultValue '') }
+    if ($runNotesBox) { $runNotesBox.Text = [string](Get-SettingValue -Settings $settings -Name 'Notes' -DefaultValue '') }
+    if ($runRunIdBox) { $runRunIdBox.Text = [string](Get-SettingValue -Settings $settings -Name 'RunId' -DefaultValue '') }
+    if ($runTaskInventoryBox) { $runTaskInventoryBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeScheduledTaskInventory' -DefaultValue $false) }
+    if ($runCylanceBox) { $runCylanceBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeCylanceHealth' -DefaultValue $false) }
+    if ($runTaskNamesBox) { $runTaskNamesBox.Text = [string]::Join([Environment]::NewLine, @(Get-SettingValue -Settings $settings -Name 'TaskNamesToCheck' -DefaultValue @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload'))) }
+    if ($taskImageVersionBox) { $taskImageVersionBox.Text = [string](Get-SettingValue -Settings $settings -Name 'ImageVersion' -DefaultValue '') }
+    if ($taskNotesBox) { $taskNotesBox.Text = [string](Get-SettingValue -Settings $settings -Name 'Notes' -DefaultValue '') }
+    if ($taskRunIdBox) { $taskRunIdBox.Text = [string](Get-SettingValue -Settings $settings -Name 'RunId' -DefaultValue '') }
+    if ($taskIncludeEventsBox) { $taskIncludeEventsBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeEventLogContext' -DefaultValue (Get-SettingValue -Settings $settings -Name 'IncludeEventContext' -DefaultValue $false)) }
+    if ($taskMaxEventsBox) { $taskMaxEventsBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxEventsPerAlert' -DefaultValue 50) }
+    if ($taskAnonymizeBox) { $taskAnonymizeBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'AnonymizeUsers' -DefaultValue $false) }
+    if ($taskTaskInventoryBox) { $taskTaskInventoryBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeScheduledTaskInventory' -DefaultValue $false) }
+    if ($taskCylanceBox) { $taskCylanceBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeCylanceHealth' -DefaultValue $false) }
+    if ($taskTaskNamesBox) { $taskTaskNamesBox.Text = [string]::Join([Environment]::NewLine, @(Get-SettingValue -Settings $settings -Name 'TaskNamesToCheck' -DefaultValue @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload'))) }
     Add-StatusLine 'Konfiguration geladen.'
 }
 
