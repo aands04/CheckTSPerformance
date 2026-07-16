@@ -87,10 +87,21 @@ function Read-Settings {
     if (Test-Path -LiteralPath $Path) {
         $json = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
         foreach ($property in $settings.PSObject.Properties.Name) {
-            if ($null -ne $json.$property) { $settings.$property = $json.$property }
+            if ($json.PSObject.Properties.Name -contains $property -and $null -ne $json.$property) { $settings.$property = $json.$property }
         }
     }
     return $settings
+}
+
+
+function Ensure-SettingProperty {
+    param($Settings, [string]$Name, $DefaultValue)
+    if (-not ($Settings.PSObject.Properties.Name -contains $Name)) {
+        $Settings | Add-Member -MemberType NoteProperty -Name $Name -Value $DefaultValue
+    }
+    elseif ($null -eq $Settings.$Name) {
+        $Settings.$Name = $DefaultValue
+    }
 }
 
 function Merge-ParameterSettings {
@@ -478,7 +489,7 @@ function Invoke-ServerCollectionRound {
             try {
                 Test-WSMan -ComputerName $Server -ErrorAction Stop | Out-Null
                 $remoteBlock = [scriptblock]::Create($RemoteScript)
-                $result = Invoke-Command -ComputerName $Server -ScriptBlock $remoteBlock -ArgumentList $SettingsHash.CpuSampleSeconds, $SettingsHash.TopProcessCount, $SettingsHash.AlertTopProcessCount, $SettingsHash.CpuWarningThreshold, $SettingsHash.CpuCriticalThreshold, $SettingsHash.IncludeEventLogContext, $SettingsHash.AnonymizeUsers, $SettingsHash.MaxEventsPerAlert, $SettingsHash.MaxForcedProcessesPerCategory -ErrorAction Stop
+                $result = Invoke-Command -ComputerName $Server -ScriptBlock $remoteBlock -ArgumentList $SettingsHash.CpuSampleSeconds, $SettingsHash.TopProcessCount, $SettingsHash.AlertTopProcessCount, $SettingsHash.CpuWarningThreshold, $SettingsHash.CpuCriticalThreshold, $SettingsHash.IncludeEventLogContext, $SettingsHash.AnonymizeUsers, $SettingsHash.MaxEventsPerAlert, $(if ($SettingsHash.PSObject.Properties.Name -contains 'MaxForcedProcessesPerCategory') { $SettingsHash.MaxForcedProcessesPerCategory } else { 10 }) -ErrorAction Stop
                 [pscustomobject]@{ TargetServer = $Server; Status = 'OK'; Result = $result; ErrorMessage = '' }
             }
             catch {
@@ -730,6 +741,7 @@ function New-RunSummaryText {
 
 if ((Test-Path -LiteralPath $ConfigPath -PathType Container)) { $ConfigPath = Join-Path $ConfigPath 'settings.json' }
 $settings = Merge-ParameterSettings -Settings (Read-Settings -Path $ConfigPath)
+Ensure-SettingProperty -Settings $settings -Name 'MaxForcedProcessesPerCategory' -DefaultValue 10
 if ($settings.IncludeEventContext) { $settings.IncludeEventLogContext = $true }
 $servers = @(Read-ServerList -Path $ServerListPath)
 $rawPath = Join-Path $OutputPath 'raw'
