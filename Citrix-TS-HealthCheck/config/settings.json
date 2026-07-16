@@ -8,9 +8,26 @@
   "CpuCriticalThreshold": 90,
   "MaxParallel": 4,
   "IncludeEventLogContext": false,
+  "IncludeEventContext": false,
   "AnonymizeUsers": false,
+  "MaxEventsPerAlert": 50,
+  "ImageVersion": "",
+  "Notes": "",
+  "RunId": "",
+  "IncludeScheduledTaskInventory": false,
+  "IncludeCylanceHealth": false,
+  "TaskNamesToCheck": [
+    "nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}",
+    "Adobe Acrobat Update Task",
+    "MicrosoftEdgeUpdateTaskMachineUA",
+    "Launch Adobe CCXProcess",
+    "LexwareAppSysOpt",
+    "Office Automatic Updates 2.0",
+    "Office Feature Updates",
+    "Office Feature Updates Logon",
+    "BackgroundDownload"
+  ],
   "OutputDelimiter": ";",
   "WinRMTimeoutSeconds": 5,
-  "IncludeDisconnectedSessions": true,
-  "MaxEventsPerAlert": 50
+  "IncludeDisconnectedSessions": true
 }

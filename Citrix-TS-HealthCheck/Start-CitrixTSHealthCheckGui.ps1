@@ -82,6 +82,13 @@ function Read-SettingsFile {
             CpuCriticalThreshold = 90
             MaxParallel = 4
             IncludeEventLogContext = $false
+            IncludeEventContext = $false
+            ImageVersion = ''
+            Notes = ''
+            RunId = ''
+            IncludeScheduledTaskInventory = $false
+            IncludeCylanceHealth = $false
+            TaskNamesToCheck = @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload')
             AnonymizeUsers = $false
             MaxEventsPerAlert = 50
             OutputDelimiter = ';'
@@ -103,6 +110,9 @@ function Save-SettingsFile {
     $configFolder = Join-ProjectPath -ChildPath @('config')
     if (-not (Test-Path -LiteralPath $configFolder)) { New-Item -ItemType Directory -Path $configFolder -Force | Out-Null }
     $settingsPath = Join-ProjectPath -ChildPath @('config','settings.json')
+    $existing = $null
+    if (Test-Path -LiteralPath $settingsPath) { try { $existing = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $existing = $null } }
+    $taskNames = if ($existing -and $existing.TaskNamesToCheck) { @($existing.TaskNamesToCheck) } else { @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload') }
     $settings = [ordered]@{
         DurationMinutes = 480
         IntervalSeconds = 300
@@ -112,7 +122,14 @@ function Save-SettingsFile {
         CpuWarningThreshold = 70
         CpuCriticalThreshold = 90
         MaxParallel = 4
-        IncludeEventLogContext = $false
+        IncludeEventLogContext = if ($existing -and $null -ne $existing.IncludeEventLogContext) { [bool]$existing.IncludeEventLogContext } else { $false }
+        IncludeEventContext = if ($existing -and $null -ne $existing.IncludeEventContext) { [bool]$existing.IncludeEventContext } else { $false }
+        ImageVersion = if ($existing) { [string]$existing.ImageVersion } else { '' }
+        Notes = if ($existing) { [string]$existing.Notes } else { '' }
+        RunId = if ($existing) { [string]$existing.RunId } else { '' }
+        IncludeScheduledTaskInventory = if ($existing -and $null -ne $existing.IncludeScheduledTaskInventory) { [bool]$existing.IncludeScheduledTaskInventory } else { $false }
+        IncludeCylanceHealth = if ($existing -and $null -ne $existing.IncludeCylanceHealth) { [bool]$existing.IncludeCylanceHealth } else { $false }
+        TaskNamesToCheck = $taskNames
         AnonymizeUsers = $false
         MaxEventsPerAlert = 50
         OutputDelimiter = $OutputDelimiter

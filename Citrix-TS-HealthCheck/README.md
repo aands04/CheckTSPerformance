@@ -238,7 +238,7 @@ Die Prozess-CPU wird ab dieser Version mit zwei Feldern ausgegeben:
 
 ### RunId und Laufordner
 
-Jeder Start erzeugt eine eindeutige `RunId` im Format `YYYY-MM-DD_HH-mm-ss`. Diese `RunId` wird in die CSV-Zeilen geschrieben. Zusaetzlich werden die Daten des Laufs nach `output/runs/<RunId>/` geschrieben, damit mehrere Laeufe am gleichen Tag nicht nur ueber Tagesdateien unterschieden werden muessen.
+Jeder Start erzeugt eine eindeutige `RunId` im Format `yyyyMMdd_HHmmss_GUIDkurz`. Diese `RunId` wird in die CSV-Zeilen geschrieben. Zusaetzlich werden die Daten des Laufs nach `output/runs/<RunId>/` geschrieben, damit mehrere Laeufe am gleichen Tag nicht nur ueber Tagesdateien unterschieden werden muessen.
 
 Session-Felder:
 
@@ -251,3 +251,32 @@ Alert-Felder:
 
 - `ProcessRank`: Rang innerhalb der geloggten Alert-Prozesse nach CPU.
 - `InclusionReason`: `TopCpu`, `ForcedSecurity`, `ForcedNexus`, `ForcedPrinting`, `ForcedCitrixWEM` oder `ForcedMonitoring`.
+
+## Vergleichslaeufe nach Image-Aenderungen
+
+Fuer Vergleiche zwischen Citrix-/MCS-Image-Versionen kann jeder Lauf mit Metadaten markiert werden:
+
+```powershell
+.\Invoke-CitrixTSHealthCheck.ps1 `
+  -ServerListPath .\config\servers.txt `
+  -DurationMinutes 240 `
+  -IntervalSeconds 300 `
+  -CpuSampleSeconds 5 `
+  -ImageVersion "2026-07-16-CylanceFixed-AVExclusions" `
+  -Notes "Test nach korrigierter Cylance-Installation und AV-Ausnahmen" `
+  -IncludeScheduledTaskInventory `
+  -IncludeCylanceHealth `
+  -IncludeEventContext
+```
+
+Die automatisch erzeugte `RunId` hat das Format `yyyyMMdd_HHmmss_GUIDkurz`, kann bei Bedarf aber mit `-RunId` vorgegeben werden. Alle Laufdateien enthalten die `RunId` im Dateinamen, z. B. `ServerSamples_<RunId>.csv`, `Raw_ProcessSamples_<RunId>.csv`, `AlertSamples_<RunId>.csv`, `CategorySummary_<RunId>.csv`, `RunSummary_<RunId>.csv` und `RunLog_<RunId>.log`. Parallel wird ein isolierter Ordner `output/runs/<RunId>/` geschrieben.
+
+Optionale Zusatzdateien:
+
+- `ScheduledTaskInventory_<RunId>.csv`: inventarisiert die konfigurierten Update-/Autostart-Tasks pro Server. Nicht vorhandene Tasks werden mit `State = NOT_FOUND` protokolliert; das Script deaktiviert keine Tasks.
+- `CylanceHealth_<RunId>.csv`: sammelt Basisdaten zu `CylanceSvc`, `sc.exe qprotection CylanceSvc` und `C:\ProgramData\Cylance\Status\Status.json`.
+- `CylanceHealth_Duplicates_<RunId>.csv`: meldet doppelte `SerialNumber` oder `StatusDeviceName`, damit geklonte Gold-Image-Identitaeten auffallen.
+- `CategorySummaryAggregated_<RunId>.csv`: aggregierte Kategorieauswertung ueber den gesamten Lauf pro Server und Kategorie.
+- `EventContext_<RunId>.csv`: optionaler Event-Kontext bei CPU-Warnungen aus TaskScheduler, System, Application, WMI-Activity, Defender, SENSE und, falls vorhanden, Citrix-WEM-Logs.
+
+Die Kategorisierung beruecksichtigt neben dem Prozessnamen auch Pfad und CommandLine. Nexus-Prozesse unter `C:\Program Files (x86)\Nexus\Prog\`, Adobe-Prozesse unter `*\Adobe\*`, Citrix-/Workspace-/WEM-Prozesse unter `*\Citrix\*`, Edge/WebView2, Office sowie Monitoring-Prozesse wie `uberAgent`, `wsmprovhost`, `WmiPrvSE`, `powershell` und `pwsh` werden konsistent in Raw-, Alert-, Server- und Kategorieausgaben markiert.
