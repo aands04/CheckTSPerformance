@@ -284,3 +284,7 @@ Die Kategorisierung beruecksichtigt neben dem Prozessnamen auch Pfad und Command
 ### GUI: alle Collector-Optionen setzen
 
 Die GUI stellt die wichtigsten Collector-Parameter sowohl fuer den manuellen Start als auch fuer geplante Tasks bereit: Laufdauer, Intervall, CPU-Delta, Top-Prozess-Anzahlen, Warn-/Kritisch-Schwellen, Parallelitaet, EventContext/MaxEvents, Anonymisierung, `ImageVersion`, `Notes`, optionale `RunId`, Scheduled-Task-Inventar, Cylance/Aurora-Health und die Liste `TaskNamesToCheck`. Der erzeugte PowerShell-Aufruf wird im Statusfenster protokolliert, damit nachvollziehbar ist, welche Optionen tatsaechlich gestartet oder im Taskplaner hinterlegt wurden.
+
+### Lauf aus der GUI abbrechen
+
+Ein laufender manueller HealthCheck kann im Tab **Ausfuehren** mit **HealthCheck stoppen** beendet werden. Die GUI fragt vorher nach einer Bestaetigung und beendet dann den gestarteten PowerShell-Prozess; bereits geschriebene CSV-/Logdaten bleiben erhalten.

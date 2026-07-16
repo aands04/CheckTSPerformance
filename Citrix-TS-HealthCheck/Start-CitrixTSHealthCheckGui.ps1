@@ -337,6 +337,7 @@ function Start-HealthCheckRun {
         -PassThru
 
     $runButton.Enabled = $false
+    $stopButton.Enabled = $true
     $progressBar.Style = 'Marquee'
     Add-StatusLine "HealthCheck gestartet. PID: $($script:HealthCheckProcess.Id)"
     $timer.Start()
@@ -395,11 +396,37 @@ function Register-HealthCheckScheduledTask {
     Add-StatusLine "Scheduled Task eingerichtet: $taskName"
 }
 
+
+function Stop-HealthCheckRun {
+    if (-not $script:HealthCheckProcess -or $script:HealthCheckProcess.HasExited) {
+        Add-StatusLine 'Kein laufender HealthCheck zum Stoppen gefunden.'
+        return
+    }
+    $answer = [System.Windows.Forms.MessageBox]::Show('Laufenden HealthCheck wirklich abbrechen?', 'Citrix-TS-HealthCheck', 'YesNo', 'Warning')
+    if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    try {
+        Add-StatusLine "Stop angefordert. PID: $($script:HealthCheckProcess.Id)"
+        Stop-Process -Id $script:HealthCheckProcess.Id -Force -ErrorAction Stop
+        Add-StatusLine 'HealthCheck-Prozess wurde beendet.'
+    }
+    catch {
+        Add-StatusLine "Stop fehlgeschlagen: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Stop fehlgeschlagen', 'OK', 'Error') | Out-Null
+    }
+    finally {
+        $stopButton.Enabled = $false
+        $runButton.Enabled = $true
+        $progressBar.Style = 'Blocks'
+        $progressBar.Value = 0
+    }
+}
+
 function Complete-HealthCheckRun {
     $timer.Stop()
     $progressBar.Style = 'Blocks'
     $progressBar.Value = 0
     $runButton.Enabled = $true
+    $stopButton.Enabled = $false
 
     $script:HealthCheckProcess.Refresh()
     $exitCode = $script:HealthCheckProcess.ExitCode
@@ -632,6 +659,10 @@ $runTab.Controls.Add($eightHourPresetButton)
 
 $runButton = New-Button -Text 'HealthCheck starten' -X 15 -Y 165 -Width 170 -Height 34
 $runTab.Controls.Add($runButton)
+
+$stopButton = New-Button -Text 'HealthCheck stoppen' -X 320 -Y 165 -Width 170 -Height 34
+$stopButton.Enabled = $false
+$runTab.Controls.Add($stopButton)
 
 $progressBar = New-Object System.Windows.Forms.ProgressBar
 $progressBar.Location = New-Object System.Drawing.Point(15, 445)
@@ -879,10 +910,14 @@ $runButton.Add_Click({
     try { Start-HealthCheckRun }
     catch {
         $runButton.Enabled = $true
+        $stopButton.Enabled = $false
         $progressBar.Style = 'Blocks'
         Add-StatusLine "Start fehlgeschlagen: $($_.Exception.Message)"
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Start fehlgeschlagen', 'OK', 'Error') | Out-Null
     }
+})
+$stopButton.Add_Click({
+    Stop-HealthCheckRun
 })
 $taskTomorrow7Button.Add_Click({
     $taskStartPicker.Value = (Get-Date).Date.AddDays(1).AddHours(7)
