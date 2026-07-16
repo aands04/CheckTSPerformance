@@ -280,3 +280,7 @@ Optionale Zusatzdateien:
 - `EventContext_<RunId>.csv`: optionaler Event-Kontext bei CPU-Warnungen aus TaskScheduler, System, Application, WMI-Activity, Defender, SENSE und, falls vorhanden, Citrix-WEM-Logs.
 
 Die Kategorisierung beruecksichtigt neben dem Prozessnamen auch Pfad und CommandLine. Nexus-Prozesse unter `C:\Program Files (x86)\Nexus\Prog\`, Adobe-Prozesse unter `*\Adobe\*`, Citrix-/Workspace-/WEM-Prozesse unter `*\Citrix\*`, Edge/WebView2, Office sowie Monitoring-Prozesse wie `uberAgent`, `wsmprovhost`, `WmiPrvSE`, `powershell` und `pwsh` werden konsistent in Raw-, Alert-, Server- und Kategorieausgaben markiert.
+
+### GUI: alle Collector-Optionen setzen
+
+Die GUI stellt die wichtigsten Collector-Parameter sowohl fuer den manuellen Start als auch fuer geplante Tasks bereit: Laufdauer, Intervall, CPU-Delta, Top-Prozess-Anzahlen, Warn-/Kritisch-Schwellen, Parallelitaet, EventContext/MaxEvents, Anonymisierung, `ImageVersion`, `Notes`, optionale `RunId`, Scheduled-Task-Inventar, Cylance/Aurora-Health und die Liste `TaskNamesToCheck`. Der erzeugte PowerShell-Aufruf wird im Statusfenster protokolliert, damit nachvollziehbar ist, welche Optionen tatsaechlich gestartet oder im Taskplaner hinterlegt wurden.

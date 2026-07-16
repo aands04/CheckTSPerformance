@@ -104,34 +104,49 @@ function Save-SettingsFile {
         [int]$CpuSampleSeconds,
         [int]$TopProcessCount,
         [int]$WinRMTimeoutSeconds,
+        [int]$DurationMinutes = 480,
+        [int]$IntervalSeconds = 300,
+        [int]$AlertTopProcessCount = 25,
+        [double]$CpuWarningThreshold = 70,
+        [double]$CpuCriticalThreshold = 90,
+        [int]$MaxParallel = 4,
         [string]$OutputDelimiter,
-        [bool]$IncludeDisconnectedSessions
+        [bool]$IncludeDisconnectedSessions,
+        [string]$ImageVersion = '',
+        [string]$Notes = '',
+        [string]$RunId = '',
+        [bool]$IncludeScheduledTaskInventory = $false,
+        [bool]$IncludeCylanceHealth = $false,
+        [bool]$IncludeEventContext = $false,
+        [bool]$AnonymizeUsers = $false,
+        [int]$MaxEventsPerAlert = 50,
+        [string[]]$TaskNamesToCheck = @()
     )
     $configFolder = Join-ProjectPath -ChildPath @('config')
     if (-not (Test-Path -LiteralPath $configFolder)) { New-Item -ItemType Directory -Path $configFolder -Force | Out-Null }
     $settingsPath = Join-ProjectPath -ChildPath @('config','settings.json')
     $existing = $null
     if (Test-Path -LiteralPath $settingsPath) { try { $existing = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $existing = $null } }
-    $taskNames = if ($existing -and $existing.TaskNamesToCheck) { @($existing.TaskNamesToCheck) } else { @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload') }
+    $taskNames = if ($TaskNamesToCheck -and $TaskNamesToCheck.Count -gt 0) { @($TaskNamesToCheck) } elseif ($existing -and $existing.TaskNamesToCheck) { @($existing.TaskNamesToCheck) } else { @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload') }
     $settings = [ordered]@{
-        DurationMinutes = 480
-        IntervalSeconds = 300
+        DurationMinutes = $DurationMinutes
+        IntervalSeconds = $IntervalSeconds
         CpuSampleSeconds = $CpuSampleSeconds
         TopProcessCount = $TopProcessCount
-        AlertTopProcessCount = 25
-        CpuWarningThreshold = 70
-        CpuCriticalThreshold = 90
-        MaxParallel = 4
-        IncludeEventLogContext = if ($existing -and $null -ne $existing.IncludeEventLogContext) { [bool]$existing.IncludeEventLogContext } else { $false }
-        IncludeEventContext = if ($existing -and $null -ne $existing.IncludeEventContext) { [bool]$existing.IncludeEventContext } else { $false }
-        ImageVersion = if ($existing) { [string]$existing.ImageVersion } else { '' }
-        Notes = if ($existing) { [string]$existing.Notes } else { '' }
-        RunId = if ($existing) { [string]$existing.RunId } else { '' }
-        IncludeScheduledTaskInventory = if ($existing -and $null -ne $existing.IncludeScheduledTaskInventory) { [bool]$existing.IncludeScheduledTaskInventory } else { $false }
-        IncludeCylanceHealth = if ($existing -and $null -ne $existing.IncludeCylanceHealth) { [bool]$existing.IncludeCylanceHealth } else { $false }
+        AlertTopProcessCount = $AlertTopProcessCount
+        CpuWarningThreshold = $CpuWarningThreshold
+        CpuCriticalThreshold = $CpuCriticalThreshold
+        MaxParallel = $MaxParallel
+        IncludeEventLogContext = $IncludeEventContext
+        IncludeEventContext = $IncludeEventContext
+        ImageVersion = $ImageVersion
+        Notes = $Notes
+        RunId = $RunId
+        IncludeScheduledTaskInventory = $IncludeScheduledTaskInventory
+        IncludeCylanceHealth = $IncludeCylanceHealth
         TaskNamesToCheck = $taskNames
-        AnonymizeUsers = $false
-        MaxEventsPerAlert = 50
+        AnonymizeUsers = $AnonymizeUsers
+        MaxEventsPerAlert = $MaxEventsPerAlert
         OutputDelimiter = $OutputDelimiter
         WinRMTimeoutSeconds = $WinRMTimeoutSeconds
         IncludeDisconnectedSessions = $IncludeDisconnectedSessions
@@ -150,6 +165,11 @@ function Get-LatestFile {
 function Quote-Argument {
     param([Parameter(Mandatory=$true)][string]$Value)
     return '"{0}"' -f ($Value -replace '"', '\"')
+}
+
+function Get-LinesFromTextBox {
+    param([System.Windows.Forms.TextBox]$TextBox)
+    @($TextBox.Lines | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
 function Open-PathWithShell {
@@ -174,6 +194,7 @@ function Load-GuiData {
     $winRmTimeoutBox.Value = [decimal]$settings.WinRMTimeoutSeconds
     $delimiterBox.Text = [string]$settings.OutputDelimiter
     $includeDisconnectedBox.Checked = [bool]$settings.IncludeDisconnectedSessions
+    if ($outputPathBox -and [string]::IsNullOrWhiteSpace($outputPathBox.Text)) { $outputPathBox.Text = [IO.Path]::Combine($ProjectRoot, 'output') }
     if ($manualDurationBox) { $manualDurationBox.Value = [decimal]$settings.DurationMinutes }
     if ($manualIntervalBox) { $manualIntervalBox.Value = [decimal]$settings.IntervalSeconds }
     if ($runCpuSampleBox) { $runCpuSampleBox.Value = [decimal]$settings.CpuSampleSeconds }
@@ -185,6 +206,21 @@ function Load-GuiData {
     if ($runIncludeEventsBox) { $runIncludeEventsBox.Checked = [bool]$settings.IncludeEventLogContext }
     if ($runMaxEventsBox) { $runMaxEventsBox.Value = [decimal]$settings.MaxEventsPerAlert }
     if ($runAnonymizeBox) { $runAnonymizeBox.Checked = [bool]$settings.AnonymizeUsers }
+    if ($runImageVersionBox) { $runImageVersionBox.Text = [string]$settings.ImageVersion }
+    if ($runNotesBox) { $runNotesBox.Text = [string]$settings.Notes }
+    if ($runRunIdBox) { $runRunIdBox.Text = [string]$settings.RunId }
+    if ($runTaskInventoryBox) { $runTaskInventoryBox.Checked = [bool]$settings.IncludeScheduledTaskInventory }
+    if ($runCylanceBox) { $runCylanceBox.Checked = [bool]$settings.IncludeCylanceHealth }
+    if ($runTaskNamesBox) { $runTaskNamesBox.Text = [string]::Join([Environment]::NewLine, @($settings.TaskNamesToCheck)) }
+    if ($taskImageVersionBox) { $taskImageVersionBox.Text = [string]$settings.ImageVersion }
+    if ($taskNotesBox) { $taskNotesBox.Text = [string]$settings.Notes }
+    if ($taskRunIdBox) { $taskRunIdBox.Text = [string]$settings.RunId }
+    if ($taskIncludeEventsBox) { $taskIncludeEventsBox.Checked = [bool]$settings.IncludeEventLogContext }
+    if ($taskMaxEventsBox) { $taskMaxEventsBox.Value = [decimal]$settings.MaxEventsPerAlert }
+    if ($taskAnonymizeBox) { $taskAnonymizeBox.Checked = [bool]$settings.AnonymizeUsers }
+    if ($taskTaskInventoryBox) { $taskTaskInventoryBox.Checked = [bool]$settings.IncludeScheduledTaskInventory }
+    if ($taskCylanceBox) { $taskCylanceBox.Checked = [bool]$settings.IncludeCylanceHealth }
+    if ($taskTaskNamesBox) { $taskTaskNamesBox.Text = [string]::Join([Environment]::NewLine, @($settings.TaskNamesToCheck)) }
     Add-StatusLine 'Konfiguration geladen.'
 }
 
@@ -193,11 +229,26 @@ function Save-GuiData {
     if (-not (Test-Path -LiteralPath $configFolder)) { New-Item -ItemType Directory -Path $configFolder -Force | Out-Null }
     $serversPath = Join-ProjectPath -ChildPath @('config','servers.txt')
     $serversBox.Lines | Set-Content -LiteralPath $serversPath -Encoding UTF8
-    Save-SettingsFile -CpuSampleSeconds ([int]$cpuSampleBox.Value) `
-        -TopProcessCount ([int]$topProcessBox.Value) `
+    Save-SettingsFile -CpuSampleSeconds ([int]$runCpuSampleBox.Value) `
+        -TopProcessCount ([int]$runTopProcessBox.Value) `
         -WinRMTimeoutSeconds ([int]$winRmTimeoutBox.Value) `
+        -DurationMinutes ([int]$manualDurationBox.Value) `
+        -IntervalSeconds ([int]$manualIntervalBox.Value) `
+        -AlertTopProcessCount ([int]$runAlertTopProcessBox.Value) `
+        -CpuWarningThreshold ([double]$runWarningBox.Value) `
+        -CpuCriticalThreshold ([double]$runCriticalBox.Value) `
+        -MaxParallel ([int]$runMaxParallelBox.Value) `
         -OutputDelimiter $delimiterBox.Text `
-        -IncludeDisconnectedSessions $includeDisconnectedBox.Checked
+        -IncludeDisconnectedSessions $includeDisconnectedBox.Checked `
+        -ImageVersion $runImageVersionBox.Text `
+        -Notes $runNotesBox.Text `
+        -RunId $runRunIdBox.Text `
+        -IncludeScheduledTaskInventory $runTaskInventoryBox.Checked `
+        -IncludeCylanceHealth $runCylanceBox.Checked `
+        -IncludeEventContext $runIncludeEventsBox.Checked `
+        -AnonymizeUsers $runAnonymizeBox.Checked `
+        -MaxEventsPerAlert ([int]$runMaxEventsBox.Value) `
+        -TaskNamesToCheck (Get-LinesFromTextBox -TextBox $runTaskNamesBox)
     Add-StatusLine 'Konfiguration gespeichert.'
 }
 
@@ -222,7 +273,7 @@ function Start-HealthCheckRun {
         '-File', ('"{0}"' -f $scriptPath),
         '-ServerListPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('config','servers.txt'))),
         '-ConfigPath', ('"{0}"' -f (Join-ProjectPath -ChildPath @('config'))),
-        '-OutputPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('output'))),
+        '-OutputPath', (Quote-Argument -Value $outputPathBox.Text),
         '-DurationMinutes', ([int]$manualDurationBox.Value),
         '-IntervalSeconds', ([int]$manualIntervalBox.Value),
         '-CpuSampleSeconds', ([int]$runCpuSampleBox.Value),
@@ -233,7 +284,13 @@ function Start-HealthCheckRun {
         '-MaxParallel', ([int]$runMaxParallelBox.Value),
         '-MaxEventsPerAlert', ([int]$runMaxEventsBox.Value)
     )
-    if ($runIncludeEventsBox.Checked) { $arguments += '-IncludeEventLogContext' }
+    if (-not [string]::IsNullOrWhiteSpace($runImageVersionBox.Text)) { $arguments += @('-ImageVersion', (Quote-Argument -Value $runImageVersionBox.Text)) }
+    if (-not [string]::IsNullOrWhiteSpace($runNotesBox.Text)) { $arguments += @('-Notes', (Quote-Argument -Value $runNotesBox.Text)) }
+    if (-not [string]::IsNullOrWhiteSpace($runRunIdBox.Text)) { $arguments += @('-RunId', (Quote-Argument -Value $runRunIdBox.Text)) }
+    if ($runTaskInventoryBox.Checked) { $arguments += '-IncludeScheduledTaskInventory' }
+    if ($runCylanceBox.Checked) { $arguments += '-IncludeCylanceHealth' }
+    foreach ($taskName in (Get-LinesFromTextBox -TextBox $runTaskNamesBox)) { $arguments += @('-TaskNamesToCheck', (Quote-Argument -Value $taskName)) }
+    if ($runIncludeEventsBox.Checked) { $arguments += '-IncludeEventContext' }
     if ($runAnonymizeBox.Checked) { $arguments += '-AnonymizeUsers' }
     $arguments = $arguments -join ' '
     Add-StatusLine ("PowerShell-Aufruf: powershell.exe $arguments")
@@ -266,7 +323,7 @@ function Register-HealthCheckScheduledTask {
         '-File', (Quote-Argument -Value $scriptPath),
         '-ServerListPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('config','servers.txt'))),
         '-ConfigPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('config'))),
-        '-OutputPath', (Quote-Argument -Value (Join-ProjectPath -ChildPath @('output'))),
+        '-OutputPath', (Quote-Argument -Value $outputPathBox.Text),
         '-DurationMinutes', ([int]$taskRunDurationBox.Value),
         '-IntervalSeconds', ([int]$taskIntervalBox.Value),
         '-CpuSampleSeconds', ([int]$taskCpuSampleBox.Value),
@@ -277,7 +334,13 @@ function Register-HealthCheckScheduledTask {
         '-MaxParallel', ([int]$taskMaxParallelBox.Value),
         '-MaxEventsPerAlert', ([int]$taskMaxEventsBox.Value)
     )
-    if ($taskIncludeEventsBox.Checked) { $actionArguments += '-IncludeEventLogContext' }
+    if (-not [string]::IsNullOrWhiteSpace($taskImageVersionBox.Text)) { $actionArguments += @('-ImageVersion', (Quote-Argument -Value $taskImageVersionBox.Text)) }
+    if (-not [string]::IsNullOrWhiteSpace($taskNotesBox.Text)) { $actionArguments += @('-Notes', (Quote-Argument -Value $taskNotesBox.Text)) }
+    if (-not [string]::IsNullOrWhiteSpace($taskRunIdBox.Text)) { $actionArguments += @('-RunId', (Quote-Argument -Value $taskRunIdBox.Text)) }
+    if ($taskTaskInventoryBox.Checked) { $actionArguments += '-IncludeScheduledTaskInventory' }
+    if ($taskCylanceBox.Checked) { $actionArguments += '-IncludeCylanceHealth' }
+    foreach ($taskNameToCheck in (Get-LinesFromTextBox -TextBox $taskTaskNamesBox)) { $actionArguments += @('-TaskNamesToCheck', (Quote-Argument -Value $taskNameToCheck)) }
+    if ($taskIncludeEventsBox.Checked) { $actionArguments += '-IncludeEventContext' }
     if ($taskAnonymizeBox.Checked) { $actionArguments += '-AnonymizeUsers' }
     $actionArguments = $actionArguments -join ' '
     Add-StatusLine ("Task PowerShell-Aufruf: powershell.exe $actionArguments")
@@ -317,17 +380,17 @@ function Complete-HealthCheckRun {
         if ($errorOutput) { Add-StatusLine "Fehlerausgabe: $($errorOutput.Trim())" }
     }
 
-    $latestSummary = Get-LatestFile -Folder (Join-ProjectPath -ChildPath @('output','summary')) -Filter 'RunSummary_*.csv'
+    $latestSummary = Get-LatestFile -Folder ([IO.Path]::Combine($outputPathBox.Text, 'summary')) -Filter 'RunSummary_*.csv'
     if ($latestSummary) { Add-StatusLine "Letzte Zusammenfassung: $($latestSummary.FullName)" }
-    Add-StatusLine "Output: $(Join-ProjectPath -ChildPath @('output'))"
-    Add-StatusLine "Logs: $(Join-ProjectPath -ChildPath @('output','logs'))"
+    Add-StatusLine "Output: $($outputPathBox.Text)"
+    Add-StatusLine "Logs: $([IO.Path]::Combine($outputPathBox.Text, 'logs'))"
 }
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Citrix-TS-HealthCheck'
 $form.StartPosition = 'CenterScreen'
-$form.Size = New-Object System.Drawing.Size(920, 680)
-$form.MinimumSize = New-Object System.Drawing.Size(820, 600)
+$form.Size = New-Object System.Drawing.Size(1020, 800)
+$form.MinimumSize = New-Object System.Drawing.Size(900, 700)
 
 $tabs = New-Object System.Windows.Forms.TabControl
 $tabs.Dock = 'Fill'
@@ -337,6 +400,7 @@ $configTab = New-Object System.Windows.Forms.TabPage
 $configTab.Text = 'Konfiguration'
 $runTab = New-Object System.Windows.Forms.TabPage
 $runTab.Text = 'Ausfuehren'
+$runTab.AutoScroll = $true
 $outputTab = New-Object System.Windows.Forms.TabPage
 $outputTab.Text = 'Ausgaben'
 $taskTab = New-Object System.Windows.Forms.TabPage
@@ -381,14 +445,22 @@ $delimiterBox.Location = New-Object System.Drawing.Point(620, 162)
 $delimiterBox.Size = New-Object System.Drawing.Size(70, 22)
 $configTab.Controls.Add($delimiterBox)
 
+
+$configTab.Controls.Add((New-Label -Text 'OutputPath' -X 430 -Y 205 -Width 180))
+$outputPathBox = New-Object System.Windows.Forms.TextBox
+$outputPathBox.Location = New-Object System.Drawing.Point(620, 202)
+$outputPathBox.Size = New-Object System.Drawing.Size(230, 22)
+$outputPathBox.Text = [IO.Path]::Combine($ProjectRoot, 'output')
+$configTab.Controls.Add($outputPathBox)
+
 $includeDisconnectedBox = New-Object System.Windows.Forms.CheckBox
 $includeDisconnectedBox.Text = 'Getrennte Sessions beruecksichtigen'
-$includeDisconnectedBox.Location = New-Object System.Drawing.Point(430, 205)
+$includeDisconnectedBox.Location = New-Object System.Drawing.Point(430, 235)
 $includeDisconnectedBox.Size = New-Object System.Drawing.Size(320, 24)
 $configTab.Controls.Add($includeDisconnectedBox)
 
-$saveButton = New-Button -Text 'Speichern' -X 430 -Y 260 -Width 130
-$reloadButton = New-Button -Text 'Neu laden' -X 575 -Y 260 -Width 130
+$saveButton = New-Button -Text 'Speichern' -X 430 -Y 290 -Width 130
+$reloadButton = New-Button -Text 'Neu laden' -X 575 -Y 290 -Width 130
 $configTab.Controls.AddRange(@($saveButton, $reloadButton))
 
 $runInfo = New-Object System.Windows.Forms.Label
@@ -480,6 +552,47 @@ $runAnonymizeBox.Location = New-Object System.Drawing.Point(665, 230)
 $runAnonymizeBox.Size = New-Object System.Drawing.Size(190, 24)
 $runTab.Controls.Add($runAnonymizeBox)
 
+
+$runTab.Controls.Add((New-Label -Text 'ImageVersion' -X 15 -Y 215 -Width 170))
+$runImageVersionBox = New-Object System.Windows.Forms.TextBox
+$runImageVersionBox.Location = New-Object System.Drawing.Point(205, 212)
+$runImageVersionBox.Size = New-Object System.Drawing.Size(210, 22)
+$runTab.Controls.Add($runImageVersionBox)
+
+$runTab.Controls.Add((New-Label -Text 'RunId optional' -X 15 -Y 245 -Width 170))
+$runRunIdBox = New-Object System.Windows.Forms.TextBox
+$runRunIdBox.Location = New-Object System.Drawing.Point(205, 242)
+$runRunIdBox.Size = New-Object System.Drawing.Size(210, 22)
+$runTab.Controls.Add($runRunIdBox)
+
+$runTab.Controls.Add((New-Label -Text 'Notes' -X 15 -Y 275 -Width 170))
+$runNotesBox = New-Object System.Windows.Forms.TextBox
+$runNotesBox.Multiline = $true
+$runNotesBox.ScrollBars = 'Vertical'
+$runNotesBox.Location = New-Object System.Drawing.Point(205, 272)
+$runNotesBox.Size = New-Object System.Drawing.Size(650, 45)
+$runTab.Controls.Add($runNotesBox)
+
+$runTaskInventoryBox = New-Object System.Windows.Forms.CheckBox
+$runTaskInventoryBox.Text = 'Scheduled Task Inventory erfassen'
+$runTaskInventoryBox.Location = New-Object System.Drawing.Point(15, 330)
+$runTaskInventoryBox.Size = New-Object System.Drawing.Size(260, 24)
+$runTab.Controls.Add($runTaskInventoryBox)
+
+$runCylanceBox = New-Object System.Windows.Forms.CheckBox
+$runCylanceBox.Text = 'Cylance/Aurora Health erfassen'
+$runCylanceBox.Location = New-Object System.Drawing.Point(300, 330)
+$runCylanceBox.Size = New-Object System.Drawing.Size(260, 24)
+$runTab.Controls.Add($runCylanceBox)
+
+$runTab.Controls.Add((New-Label -Text 'TaskNamesToCheck' -X 15 -Y 365 -Width 170))
+$runTaskNamesBox = New-Object System.Windows.Forms.TextBox
+$runTaskNamesBox.Multiline = $true
+$runTaskNamesBox.ScrollBars = 'Vertical'
+$runTaskNamesBox.Location = New-Object System.Drawing.Point(205, 360)
+$runTaskNamesBox.Size = New-Object System.Drawing.Size(650, 70)
+$runTab.Controls.Add($runTaskNamesBox)
+
 $eightHourPresetButton = New-Button -Text '8h Preset' -X 205 -Y 165 -Width 100 -Height 34
 $runTab.Controls.Add($eightHourPresetButton)
 
@@ -487,7 +600,7 @@ $runButton = New-Button -Text 'HealthCheck starten' -X 15 -Y 165 -Width 170 -Hei
 $runTab.Controls.Add($runButton)
 
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(15, 285)
+$progressBar.Location = New-Object System.Drawing.Point(15, 445)
 $progressBar.Size = New-Object System.Drawing.Size(840, 24)
 $runTab.Controls.Add($progressBar)
 
@@ -495,7 +608,7 @@ $statusBox = New-Object System.Windows.Forms.TextBox
 $statusBox.Multiline = $true
 $statusBox.ScrollBars = 'Vertical'
 $statusBox.ReadOnly = $true
-$statusBox.Location = New-Object System.Drawing.Point(15, 320)
+$statusBox.Location = New-Object System.Drawing.Point(15, 480)
 $statusBox.Size = New-Object System.Drawing.Size(840, 225)
 $runTab.Controls.Add($statusBox)
 
@@ -641,17 +754,58 @@ $taskAnonymizeBox.Location = New-Object System.Drawing.Point(665, 310)
 $taskAnonymizeBox.Size = New-Object System.Drawing.Size(190, 24)
 $taskTab.Controls.Add($taskAnonymizeBox)
 
-$task4hPresetButton = New-Button -Text '4h Preset' -X 190 -Y 375 -Width 110 -Height 34
+
+$taskTab.Controls.Add((New-Label -Text 'ImageVersion' -X 25 -Y 375 -Width 190))
+$taskImageVersionBox = New-Object System.Windows.Forms.TextBox
+$taskImageVersionBox.Location = New-Object System.Drawing.Point(240, 372)
+$taskImageVersionBox.Size = New-Object System.Drawing.Size(260, 22)
+$taskTab.Controls.Add($taskImageVersionBox)
+
+$taskTab.Controls.Add((New-Label -Text 'RunId optional' -X 520 -Y 375 -Width 120))
+$taskRunIdBox = New-Object System.Windows.Forms.TextBox
+$taskRunIdBox.Location = New-Object System.Drawing.Point(650, 372)
+$taskRunIdBox.Size = New-Object System.Drawing.Size(210, 22)
+$taskTab.Controls.Add($taskRunIdBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Notes' -X 25 -Y 415 -Width 190))
+$taskNotesBox = New-Object System.Windows.Forms.TextBox
+$taskNotesBox.Multiline = $true
+$taskNotesBox.ScrollBars = 'Vertical'
+$taskNotesBox.Location = New-Object System.Drawing.Point(240, 412)
+$taskNotesBox.Size = New-Object System.Drawing.Size(620, 45)
+$taskTab.Controls.Add($taskNotesBox)
+
+$taskTaskInventoryBox = New-Object System.Windows.Forms.CheckBox
+$taskTaskInventoryBox.Text = 'Scheduled Task Inventory erfassen'
+$taskTaskInventoryBox.Location = New-Object System.Drawing.Point(25, 470)
+$taskTaskInventoryBox.Size = New-Object System.Drawing.Size(260, 24)
+$taskTab.Controls.Add($taskTaskInventoryBox)
+
+$taskCylanceBox = New-Object System.Windows.Forms.CheckBox
+$taskCylanceBox.Text = 'Cylance/Aurora Health erfassen'
+$taskCylanceBox.Location = New-Object System.Drawing.Point(320, 470)
+$taskCylanceBox.Size = New-Object System.Drawing.Size(260, 24)
+$taskTab.Controls.Add($taskCylanceBox)
+
+$taskTab.Controls.Add((New-Label -Text 'TaskNamesToCheck' -X 25 -Y 505 -Width 190))
+$taskTaskNamesBox = New-Object System.Windows.Forms.TextBox
+$taskTaskNamesBox.Multiline = $true
+$taskTaskNamesBox.ScrollBars = 'Vertical'
+$taskTaskNamesBox.Location = New-Object System.Drawing.Point(240, 500)
+$taskTaskNamesBox.Size = New-Object System.Drawing.Size(620, 75)
+$taskTab.Controls.Add($taskTaskNamesBox)
+
+$task4hPresetButton = New-Button -Text '4h Preset' -X 190 -Y 595 -Width 110 -Height 34
 $taskTab.Controls.Add($task4hPresetButton)
-$task8hPresetButton = New-Button -Text '8h Preset' -X 315 -Y 375 -Width 110 -Height 34
+$task8hPresetButton = New-Button -Text '8h Preset' -X 315 -Y 595 -Width 110 -Height 34
 $taskTab.Controls.Add($task8hPresetButton)
 
-$createTaskButton = New-Button -Text 'Task einrichten' -X 25 -Y 375 -Width 150 -Height 34
+$createTaskButton = New-Button -Text 'Task einrichten' -X 25 -Y 595 -Width 150 -Height 34
 $taskTab.Controls.Add($createTaskButton)
 
 $taskHint = New-Object System.Windows.Forms.Label
 $taskHint.Text = 'Der Task wird fuer den aktuellen Windows-Benutzer mit hoechsten Rechten eingerichtet. Die GUI muss dafuer ggf. als Administrator gestartet werden.'
-$taskHint.Location = New-Object System.Drawing.Point(25, 430)
+$taskHint.Location = New-Object System.Drawing.Point(25, 650)
 $taskHint.Size = New-Object System.Drawing.Size(820, 45)
 $taskTab.Controls.Add($taskHint)
 
@@ -739,7 +893,7 @@ $createTaskButton.Add_Click({
 })
 $openSummaryButton.Add_Click({
     try {
-        $file = Get-LatestFile -Folder (Join-ProjectPath -ChildPath @('output','summary')) -Filter 'RunSummary_*.csv'
+        $file = Get-LatestFile -Folder ([IO.Path]::Combine($outputPathBox.Text, 'summary')) -Filter 'RunSummary_*.csv'
         if (-not $file) { throw 'Keine Summary-Datei gefunden.' }
         Open-PathWithShell -Path $file.FullName
     }
@@ -747,7 +901,7 @@ $openSummaryButton.Add_Click({
 })
 $openRawButton.Add_Click({
     try {
-        $file = Get-LatestFile -Folder (Join-ProjectPath -ChildPath @('output','raw')) -Filter 'healthcheck-*.csv'
+        $file = Get-LatestFile -Folder ([IO.Path]::Combine($outputPathBox.Text, 'raw')) -Filter 'Raw_ProcessSamples_*.csv'
         if (-not $file) { throw 'Keine Raw-CSV gefunden.' }
         Open-PathWithShell -Path $file.FullName
     }
@@ -755,14 +909,14 @@ $openRawButton.Add_Click({
 })
 $openLogButton.Add_Click({
     try {
-        $file = Get-LatestFile -Folder (Join-ProjectPath -ChildPath @('output','logs')) -Filter 'healthcheck-*.log'
+        $file = Get-LatestFile -Folder ([IO.Path]::Combine($outputPathBox.Text, 'logs')) -Filter 'RunLog_*.log'
         if (-not $file) { throw 'Keine Logdatei gefunden.' }
         Open-PathWithShell -Path $file.FullName
     }
     catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Datei oeffnen', 'OK', 'Information') | Out-Null }
 })
 $openOutputButton.Add_Click({
-    try { Open-PathWithShell -Path (Join-ProjectPath -ChildPath @('output')) }
+    try { Open-PathWithShell -Path ($outputPathBox.Text) }
     catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Ordner oeffnen', 'OK', 'Information') | Out-Null }
 })
 $form.Add_Shown({
