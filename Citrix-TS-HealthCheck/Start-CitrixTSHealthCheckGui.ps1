@@ -82,6 +82,17 @@ function Read-SettingsFile {
             CpuWarningThreshold = 70
             CpuCriticalThreshold = 90
             MaxParallel = 4
+            MaxForcedProcessesPerCategory = 10
+            AutoDefenderPerfRecording = $false
+            DefenderPerfTriggerServerCpuPercent = 10
+            DefenderPerfRecordingSeconds = 900
+            DefenderPerfCooldownMinutes = 120
+            MaxConcurrentDefenderPerfRecordings = 2
+            IncludeWemEventContext = $false
+            WemTriggerServerCpuPercent = 10
+            WemEventWindowMinutes = 10
+            IncludeWemLogTail = $false
+            WemLogTailLines = 200
             IncludeEventLogContext = $false
             IncludeEventContext = $false
             ImageVersion = ''
@@ -122,6 +133,17 @@ function Save-SettingsFile {
         [double]$CpuWarningThreshold = 70,
         [double]$CpuCriticalThreshold = 90,
         [int]$MaxParallel = 4,
+        [int]$MaxForcedProcessesPerCategory = 10,
+        [bool]$AutoDefenderPerfRecording = $false,
+        [double]$DefenderPerfTriggerServerCpuPercent = 10,
+        [int]$DefenderPerfRecordingSeconds = 900,
+        [int]$DefenderPerfCooldownMinutes = 120,
+        [int]$MaxConcurrentDefenderPerfRecordings = 2,
+        [bool]$IncludeWemEventContext = $false,
+        [double]$WemTriggerServerCpuPercent = 10,
+        [int]$WemEventWindowMinutes = 10,
+        [bool]$IncludeWemLogTail = $false,
+        [int]$WemLogTailLines = 200,
         [string]$OutputDelimiter,
         [bool]$IncludeDisconnectedSessions,
         [string]$ImageVersion = '',
@@ -151,6 +173,17 @@ function Save-SettingsFile {
         CpuWarningThreshold = $CpuWarningThreshold
         CpuCriticalThreshold = $CpuCriticalThreshold
         MaxParallel = $MaxParallel
+        MaxForcedProcessesPerCategory = $MaxForcedProcessesPerCategory
+        AutoDefenderPerfRecording = $AutoDefenderPerfRecording
+        DefenderPerfTriggerServerCpuPercent = $DefenderPerfTriggerServerCpuPercent
+        DefenderPerfRecordingSeconds = $DefenderPerfRecordingSeconds
+        DefenderPerfCooldownMinutes = $DefenderPerfCooldownMinutes
+        MaxConcurrentDefenderPerfRecordings = $MaxConcurrentDefenderPerfRecordings
+        IncludeWemEventContext = $IncludeWemEventContext
+        WemTriggerServerCpuPercent = $WemTriggerServerCpuPercent
+        WemEventWindowMinutes = $WemEventWindowMinutes
+        IncludeWemLogTail = $IncludeWemLogTail
+        WemLogTailLines = $WemLogTailLines
         IncludeEventLogContext = $IncludeEventContext
         IncludeEventContext = $IncludeEventContext
         ImageVersion = $ImageVersion
@@ -205,10 +238,17 @@ function Add-StatusLine {
     try {
         $line = '{0}  {1}{2}' -f (Get-Date).ToString('HH:mm:ss'), $Message, [Environment]::NewLine
         if ($statusBox.InvokeRequired) {
-            [void]$statusBox.BeginInvoke([System.Action[string]]{ param($text) if (-not $statusBox.IsDisposed) { $statusBox.AppendText($text) } }, $line)
+            [void]$statusBox.BeginInvoke([System.Action[string]]{
+                param($text)
+                try {
+                    if ($null -ne $statusBox -and -not $statusBox.IsDisposed -and $statusBox.IsHandleCreated) { $statusBox.AppendText($text) }
+                }
+                catch [ObjectDisposedException] { }
+                catch [InvalidOperationException] { }
+            }, $line)
         }
         else {
-            $statusBox.AppendText($line)
+            if (-not $statusBox.IsDisposed -and $statusBox.IsHandleCreated) { $statusBox.AppendText($line) }
         }
     }
     catch [ObjectDisposedException] { }
@@ -235,6 +275,17 @@ function Load-GuiData {
     if ($runWarningBox) { $runWarningBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'CpuWarningThreshold' -DefaultValue 70) }
     if ($runCriticalBox) { $runCriticalBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'CpuCriticalThreshold' -DefaultValue 90) }
     if ($runMaxParallelBox) { $runMaxParallelBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxParallel' -DefaultValue 4) }
+    if ($runMaxForcedBox) { $runMaxForcedBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxForcedProcessesPerCategory' -DefaultValue 10) }
+    if ($runAutoDefenderBox) { $runAutoDefenderBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'AutoDefenderPerfRecording' -DefaultValue $false) }
+    if ($runDefenderTriggerBox) { $runDefenderTriggerBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'DefenderPerfTriggerServerCpuPercent' -DefaultValue 10) }
+    if ($runDefenderSecondsBox) { $runDefenderSecondsBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'DefenderPerfRecordingSeconds' -DefaultValue 900) }
+    if ($runDefenderCooldownBox) { $runDefenderCooldownBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'DefenderPerfCooldownMinutes' -DefaultValue 120) }
+    if ($runDefenderConcurrentBox) { $runDefenderConcurrentBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxConcurrentDefenderPerfRecordings' -DefaultValue 2) }
+    if ($runIncludeWemBox) { $runIncludeWemBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeWemEventContext' -DefaultValue $false) }
+    if ($runWemTriggerBox) { $runWemTriggerBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'WemTriggerServerCpuPercent' -DefaultValue 10) }
+    if ($runWemWindowBox) { $runWemWindowBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'WemEventWindowMinutes' -DefaultValue 10) }
+    if ($runIncludeWemTailBox) { $runIncludeWemTailBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeWemLogTail' -DefaultValue $false) }
+    if ($runWemTailLinesBox) { $runWemTailLinesBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'WemLogTailLines' -DefaultValue 200) }
     if ($runIncludeEventsBox) { $runIncludeEventsBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeEventLogContext' -DefaultValue (Get-SettingValue -Settings $settings -Name 'IncludeEventContext' -DefaultValue $false)) }
     if ($runMaxEventsBox) { $runMaxEventsBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxEventsPerAlert' -DefaultValue 50) }
     if ($runAnonymizeBox) { $runAnonymizeBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'AnonymizeUsers' -DefaultValue $false) }
@@ -247,6 +298,17 @@ function Load-GuiData {
     if ($taskImageVersionBox) { $taskImageVersionBox.Text = [string](Get-SettingValue -Settings $settings -Name 'ImageVersion' -DefaultValue '') }
     if ($taskNotesBox) { $taskNotesBox.Text = [string](Get-SettingValue -Settings $settings -Name 'Notes' -DefaultValue '') }
     if ($taskRunIdBox) { $taskRunIdBox.Text = [string](Get-SettingValue -Settings $settings -Name 'RunId' -DefaultValue '') }
+    if ($taskMaxForcedBox) { $taskMaxForcedBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxForcedProcessesPerCategory' -DefaultValue 10) }
+    if ($taskAutoDefenderBox) { $taskAutoDefenderBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'AutoDefenderPerfRecording' -DefaultValue $false) }
+    if ($taskDefenderTriggerBox) { $taskDefenderTriggerBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'DefenderPerfTriggerServerCpuPercent' -DefaultValue 10) }
+    if ($taskDefenderSecondsBox) { $taskDefenderSecondsBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'DefenderPerfRecordingSeconds' -DefaultValue 900) }
+    if ($taskDefenderCooldownBox) { $taskDefenderCooldownBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'DefenderPerfCooldownMinutes' -DefaultValue 120) }
+    if ($taskDefenderConcurrentBox) { $taskDefenderConcurrentBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxConcurrentDefenderPerfRecordings' -DefaultValue 2) }
+    if ($taskIncludeWemBox) { $taskIncludeWemBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeWemEventContext' -DefaultValue $false) }
+    if ($taskWemTriggerBox) { $taskWemTriggerBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'WemTriggerServerCpuPercent' -DefaultValue 10) }
+    if ($taskWemWindowBox) { $taskWemWindowBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'WemEventWindowMinutes' -DefaultValue 10) }
+    if ($taskIncludeWemTailBox) { $taskIncludeWemTailBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeWemLogTail' -DefaultValue $false) }
+    if ($taskWemTailLinesBox) { $taskWemTailLinesBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'WemLogTailLines' -DefaultValue 200) }
     if ($taskIncludeEventsBox) { $taskIncludeEventsBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'IncludeEventLogContext' -DefaultValue (Get-SettingValue -Settings $settings -Name 'IncludeEventContext' -DefaultValue $false)) }
     if ($taskMaxEventsBox) { $taskMaxEventsBox.Value = [decimal](Get-SettingValue -Settings $settings -Name 'MaxEventsPerAlert' -DefaultValue 50) }
     if ($taskAnonymizeBox) { $taskAnonymizeBox.Checked = [bool](Get-SettingValue -Settings $settings -Name 'AnonymizeUsers' -DefaultValue $false) }
@@ -270,6 +332,17 @@ function Save-GuiData {
         -CpuWarningThreshold ([double]$runWarningBox.Value) `
         -CpuCriticalThreshold ([double]$runCriticalBox.Value) `
         -MaxParallel ([int]$runMaxParallelBox.Value) `
+        -MaxForcedProcessesPerCategory ([int]$runMaxForcedBox.Value) `
+        -AutoDefenderPerfRecording $runAutoDefenderBox.Checked `
+        -DefenderPerfTriggerServerCpuPercent ([double]$runDefenderTriggerBox.Value) `
+        -DefenderPerfRecordingSeconds ([int]$runDefenderSecondsBox.Value) `
+        -DefenderPerfCooldownMinutes ([int]$runDefenderCooldownBox.Value) `
+        -MaxConcurrentDefenderPerfRecordings ([int]$runDefenderConcurrentBox.Value) `
+        -IncludeWemEventContext $runIncludeWemBox.Checked `
+        -WemTriggerServerCpuPercent ([double]$runWemTriggerBox.Value) `
+        -WemEventWindowMinutes ([int]$runWemWindowBox.Value) `
+        -IncludeWemLogTail $runIncludeWemTailBox.Checked `
+        -WemLogTailLines ([int]$runWemTailLinesBox.Value) `
         -OutputDelimiter $delimiterBox.Text `
         -IncludeDisconnectedSessions $includeDisconnectedBox.Checked `
         -ImageVersion $runImageVersionBox.Text `
@@ -314,7 +387,15 @@ function Start-HealthCheckRun {
         '-CpuWarningThreshold', ([double]$runWarningBox.Value),
         '-CpuCriticalThreshold', ([double]$runCriticalBox.Value),
         '-MaxParallel', ([int]$runMaxParallelBox.Value),
-        '-MaxEventsPerAlert', ([int]$runMaxEventsBox.Value)
+        '-MaxForcedProcessesPerCategory', ([int]$runMaxForcedBox.Value),
+        '-MaxEventsPerAlert', ([int]$runMaxEventsBox.Value),
+        '-DefenderPerfTriggerServerCpuPercent', ([double]$runDefenderTriggerBox.Value),
+        '-DefenderPerfRecordingSeconds', ([int]$runDefenderSecondsBox.Value),
+        '-DefenderPerfCooldownMinutes', ([int]$runDefenderCooldownBox.Value),
+        '-MaxConcurrentDefenderPerfRecordings', ([int]$runDefenderConcurrentBox.Value),
+        '-WemTriggerServerCpuPercent', ([double]$runWemTriggerBox.Value),
+        '-WemEventWindowMinutes', ([int]$runWemWindowBox.Value),
+        '-WemLogTailLines', ([int]$runWemTailLinesBox.Value)
     )
     if (-not [string]::IsNullOrWhiteSpace($runImageVersionBox.Text)) { $arguments += @('-ImageVersion', (Quote-Argument -Value $runImageVersionBox.Text)) }
     if (-not [string]::IsNullOrWhiteSpace($runNotesBox.Text)) { $arguments += @('-Notes', (Quote-Argument -Value $runNotesBox.Text)) }
@@ -324,6 +405,9 @@ function Start-HealthCheckRun {
     $runTaskNames = @(Get-LinesFromTextBox -TextBox $runTaskNamesBox)
     if ($runTaskNames.Count -gt 0) { $arguments += @('-TaskNamesToCheck', (Quote-ArrayArgument -Values $runTaskNames)) }
     if ($runIncludeEventsBox.Checked) { $arguments += '-IncludeEventContext' }
+    if ($runAutoDefenderBox.Checked) { $arguments += '-AutoDefenderPerfRecording' }
+    if ($runIncludeWemBox.Checked) { $arguments += '-IncludeWemEventContext' }
+    if ($runIncludeWemTailBox.Checked) { $arguments += '-IncludeWemLogTail' }
     if ($runAnonymizeBox.Checked) { $arguments += '-AnonymizeUsers' }
     $arguments = $arguments -join ' '
     Add-StatusLine ("PowerShell-Aufruf: powershell.exe $arguments")
@@ -366,7 +450,15 @@ function Register-HealthCheckScheduledTask {
         '-CpuWarningThreshold', ([double]$taskWarningBox.Value),
         '-CpuCriticalThreshold', ([double]$taskCriticalBox.Value),
         '-MaxParallel', ([int]$taskMaxParallelBox.Value),
-        '-MaxEventsPerAlert', ([int]$taskMaxEventsBox.Value)
+        '-MaxForcedProcessesPerCategory', ([int]$taskMaxForcedBox.Value),
+        '-MaxEventsPerAlert', ([int]$taskMaxEventsBox.Value),
+        '-DefenderPerfTriggerServerCpuPercent', ([double]$taskDefenderTriggerBox.Value),
+        '-DefenderPerfRecordingSeconds', ([int]$taskDefenderSecondsBox.Value),
+        '-DefenderPerfCooldownMinutes', ([int]$taskDefenderCooldownBox.Value),
+        '-MaxConcurrentDefenderPerfRecordings', ([int]$taskDefenderConcurrentBox.Value),
+        '-WemTriggerServerCpuPercent', ([double]$taskWemTriggerBox.Value),
+        '-WemEventWindowMinutes', ([int]$taskWemWindowBox.Value),
+        '-WemLogTailLines', ([int]$taskWemTailLinesBox.Value)
     )
     if (-not [string]::IsNullOrWhiteSpace($taskImageVersionBox.Text)) { $actionArguments += @('-ImageVersion', (Quote-Argument -Value $taskImageVersionBox.Text)) }
     if (-not [string]::IsNullOrWhiteSpace($taskNotesBox.Text)) { $actionArguments += @('-Notes', (Quote-Argument -Value $taskNotesBox.Text)) }
@@ -376,6 +468,9 @@ function Register-HealthCheckScheduledTask {
     $taskNamesToCheck = @(Get-LinesFromTextBox -TextBox $taskTaskNamesBox)
     if ($taskNamesToCheck.Count -gt 0) { $actionArguments += @('-TaskNamesToCheck', (Quote-ArrayArgument -Values $taskNamesToCheck)) }
     if ($taskIncludeEventsBox.Checked) { $actionArguments += '-IncludeEventContext' }
+    if ($taskAutoDefenderBox.Checked) { $actionArguments += '-AutoDefenderPerfRecording' }
+    if ($taskIncludeWemBox.Checked) { $actionArguments += '-IncludeWemEventContext' }
+    if ($taskIncludeWemTailBox.Checked) { $actionArguments += '-IncludeWemLogTail' }
     if ($taskAnonymizeBox.Checked) { $actionArguments += '-AnonymizeUsers' }
     $actionArguments = $actionArguments -join ' '
     Add-StatusLine ("Task PowerShell-Aufruf: powershell.exe $actionArguments")
@@ -405,9 +500,12 @@ function Stop-HealthCheckRun {
     $answer = [System.Windows.Forms.MessageBox]::Show('Laufenden HealthCheck wirklich abbrechen?', 'Citrix-TS-HealthCheck', 'YesNo', 'Warning')
     if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
     try {
+        if ($timer) { $timer.Stop() }
         Add-StatusLine "Stop angefordert. PID: $($script:HealthCheckProcess.Id)"
         Stop-Process -Id $script:HealthCheckProcess.Id -Force -ErrorAction Stop
+        try { $script:HealthCheckProcess.WaitForExit(5000) | Out-Null } catch { }
         Add-StatusLine 'HealthCheck-Prozess wurde beendet.'
+        $script:HealthCheckProcess = $null
     }
     catch {
         Add-StatusLine "Stop fehlgeschlagen: $($_.Exception.Message)"
@@ -428,6 +526,7 @@ function Complete-HealthCheckRun {
     $runButton.Enabled = $true
     $stopButton.Enabled = $false
 
+    if (-not $script:HealthCheckProcess) { return }
     $script:HealthCheckProcess.Refresh()
     $exitCode = $script:HealthCheckProcess.ExitCode
     Add-StatusLine "HealthCheck beendet. ExitCode: $exitCode"
@@ -445,6 +544,7 @@ function Complete-HealthCheckRun {
     if ($latestSummary) { Add-StatusLine "Letzte Zusammenfassung: $($latestSummary.FullName)" }
     Add-StatusLine "Output: $($outputPathBox.Text)"
     Add-StatusLine "Logs: $([IO.Path]::Combine($outputPathBox.Text, 'logs'))"
+    $script:HealthCheckProcess = $null
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -654,6 +754,88 @@ $runTaskNamesBox.Location = New-Object System.Drawing.Point(205, 360)
 $runTaskNamesBox.Size = New-Object System.Drawing.Size(650, 70)
 $runTab.Controls.Add($runTaskNamesBox)
 
+$runTab.Controls.Add((New-Label -Text 'Max Forced/Kategorie' -X 430 -Y 285 -Width 150))
+$runMaxForcedBox = New-Object System.Windows.Forms.NumericUpDown
+$runMaxForcedBox.Minimum = 0
+$runMaxForcedBox.Maximum = 100
+$runMaxForcedBox.Value = 10
+$runMaxForcedBox.Location = New-Object System.Drawing.Point(620, 282)
+$runTab.Controls.Add($runMaxForcedBox)
+
+$runAutoDefenderBox = New-Object System.Windows.Forms.CheckBox
+$runAutoDefenderBox.Text = 'Defender Recording automatisch'
+$runAutoDefenderBox.Location = New-Object System.Drawing.Point(15, 445)
+$runAutoDefenderBox.Size = New-Object System.Drawing.Size(250, 24)
+$runTab.Controls.Add($runAutoDefenderBox)
+
+$runTab.Controls.Add((New-Label -Text 'Defender Trigger %' -X 15 -Y 475 -Width 170))
+$runDefenderTriggerBox = New-Object System.Windows.Forms.NumericUpDown
+$runDefenderTriggerBox.Minimum = 1
+$runDefenderTriggerBox.Maximum = 100
+$runDefenderTriggerBox.Value = 10
+$runDefenderTriggerBox.Location = New-Object System.Drawing.Point(205, 472)
+$runTab.Controls.Add($runDefenderTriggerBox)
+
+$runTab.Controls.Add((New-Label -Text 'Defender Sekunden' -X 15 -Y 505 -Width 170))
+$runDefenderSecondsBox = New-Object System.Windows.Forms.NumericUpDown
+$runDefenderSecondsBox.Minimum = 30
+$runDefenderSecondsBox.Maximum = 7200
+$runDefenderSecondsBox.Value = 900
+$runDefenderSecondsBox.Location = New-Object System.Drawing.Point(205, 502)
+$runTab.Controls.Add($runDefenderSecondsBox)
+
+$runTab.Controls.Add((New-Label -Text 'Defender Cooldown Min.' -X 15 -Y 535 -Width 170))
+$runDefenderCooldownBox = New-Object System.Windows.Forms.NumericUpDown
+$runDefenderCooldownBox.Minimum = 0
+$runDefenderCooldownBox.Maximum = 1440
+$runDefenderCooldownBox.Value = 120
+$runDefenderCooldownBox.Location = New-Object System.Drawing.Point(205, 532)
+$runTab.Controls.Add($runDefenderCooldownBox)
+
+$runTab.Controls.Add((New-Label -Text 'Defender max parallel' -X 15 -Y 565 -Width 170))
+$runDefenderConcurrentBox = New-Object System.Windows.Forms.NumericUpDown
+$runDefenderConcurrentBox.Minimum = 1
+$runDefenderConcurrentBox.Maximum = 32
+$runDefenderConcurrentBox.Value = 2
+$runDefenderConcurrentBox.Location = New-Object System.Drawing.Point(205, 562)
+$runTab.Controls.Add($runDefenderConcurrentBox)
+
+$runIncludeWemBox = New-Object System.Windows.Forms.CheckBox
+$runIncludeWemBox.Text = 'WEM Event-Kontext'
+$runIncludeWemBox.Location = New-Object System.Drawing.Point(430, 445)
+$runIncludeWemBox.Size = New-Object System.Drawing.Size(200, 24)
+$runTab.Controls.Add($runIncludeWemBox)
+
+$runTab.Controls.Add((New-Label -Text 'WEM Trigger %' -X 430 -Y 475 -Width 150))
+$runWemTriggerBox = New-Object System.Windows.Forms.NumericUpDown
+$runWemTriggerBox.Minimum = 1
+$runWemTriggerBox.Maximum = 100
+$runWemTriggerBox.Value = 10
+$runWemTriggerBox.Location = New-Object System.Drawing.Point(620, 472)
+$runTab.Controls.Add($runWemTriggerBox)
+
+$runTab.Controls.Add((New-Label -Text 'WEM Fenster Min.' -X 430 -Y 505 -Width 150))
+$runWemWindowBox = New-Object System.Windows.Forms.NumericUpDown
+$runWemWindowBox.Minimum = 1
+$runWemWindowBox.Maximum = 240
+$runWemWindowBox.Value = 10
+$runWemWindowBox.Location = New-Object System.Drawing.Point(620, 502)
+$runTab.Controls.Add($runWemWindowBox)
+
+$runIncludeWemTailBox = New-Object System.Windows.Forms.CheckBox
+$runIncludeWemTailBox.Text = 'WEM Log-Tail'
+$runIncludeWemTailBox.Location = New-Object System.Drawing.Point(430, 535)
+$runIncludeWemTailBox.Size = New-Object System.Drawing.Size(150, 24)
+$runTab.Controls.Add($runIncludeWemTailBox)
+
+$runTab.Controls.Add((New-Label -Text 'WEM Tail Zeilen' -X 430 -Y 565 -Width 150))
+$runWemTailLinesBox = New-Object System.Windows.Forms.NumericUpDown
+$runWemTailLinesBox.Minimum = 1
+$runWemTailLinesBox.Maximum = 5000
+$runWemTailLinesBox.Value = 200
+$runWemTailLinesBox.Location = New-Object System.Drawing.Point(620, 562)
+$runTab.Controls.Add($runWemTailLinesBox)
+
 $eightHourPresetButton = New-Button -Text '8h Preset' -X 205 -Y 165 -Width 100 -Height 34
 $runTab.Controls.Add($eightHourPresetButton)
 
@@ -665,7 +847,7 @@ $stopButton.Enabled = $false
 $runTab.Controls.Add($stopButton)
 
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(15, 445)
+$progressBar.Location = New-Object System.Drawing.Point(15, 615)
 $progressBar.Size = New-Object System.Drawing.Size(840, 24)
 $runTab.Controls.Add($progressBar)
 
@@ -673,7 +855,7 @@ $statusBox = New-Object System.Windows.Forms.TextBox
 $statusBox.Multiline = $true
 $statusBox.ScrollBars = 'Vertical'
 $statusBox.ReadOnly = $true
-$statusBox.Location = New-Object System.Drawing.Point(15, 480)
+$statusBox.Location = New-Object System.Drawing.Point(15, 650)
 $statusBox.Size = New-Object System.Drawing.Size(840, 225)
 $runTab.Controls.Add($statusBox)
 
@@ -860,17 +1042,99 @@ $taskTaskNamesBox.Location = New-Object System.Drawing.Point(240, 500)
 $taskTaskNamesBox.Size = New-Object System.Drawing.Size(620, 75)
 $taskTab.Controls.Add($taskTaskNamesBox)
 
-$task4hPresetButton = New-Button -Text '4h Preset' -X 190 -Y 595 -Width 110 -Height 34
+$taskTab.Controls.Add((New-Label -Text 'Max Forced/Kategorie' -X 430 -Y 585 -Width 170))
+$taskMaxForcedBox = New-Object System.Windows.Forms.NumericUpDown
+$taskMaxForcedBox.Minimum = 0
+$taskMaxForcedBox.Maximum = 100
+$taskMaxForcedBox.Value = 10
+$taskMaxForcedBox.Location = New-Object System.Drawing.Point(620, 582)
+$taskTab.Controls.Add($taskMaxForcedBox)
+
+$taskAutoDefenderBox = New-Object System.Windows.Forms.CheckBox
+$taskAutoDefenderBox.Text = 'Defender Recording automatisch'
+$taskAutoDefenderBox.Location = New-Object System.Drawing.Point(25, 620)
+$taskAutoDefenderBox.Size = New-Object System.Drawing.Size(250, 24)
+$taskTab.Controls.Add($taskAutoDefenderBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Defender Trigger %' -X 25 -Y 650 -Width 190))
+$taskDefenderTriggerBox = New-Object System.Windows.Forms.NumericUpDown
+$taskDefenderTriggerBox.Minimum = 1
+$taskDefenderTriggerBox.Maximum = 100
+$taskDefenderTriggerBox.Value = 10
+$taskDefenderTriggerBox.Location = New-Object System.Drawing.Point(240, 647)
+$taskTab.Controls.Add($taskDefenderTriggerBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Defender Sekunden' -X 25 -Y 680 -Width 190))
+$taskDefenderSecondsBox = New-Object System.Windows.Forms.NumericUpDown
+$taskDefenderSecondsBox.Minimum = 30
+$taskDefenderSecondsBox.Maximum = 7200
+$taskDefenderSecondsBox.Value = 900
+$taskDefenderSecondsBox.Location = New-Object System.Drawing.Point(240, 677)
+$taskTab.Controls.Add($taskDefenderSecondsBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Defender Cooldown Min.' -X 25 -Y 710 -Width 190))
+$taskDefenderCooldownBox = New-Object System.Windows.Forms.NumericUpDown
+$taskDefenderCooldownBox.Minimum = 0
+$taskDefenderCooldownBox.Maximum = 1440
+$taskDefenderCooldownBox.Value = 120
+$taskDefenderCooldownBox.Location = New-Object System.Drawing.Point(240, 707)
+$taskTab.Controls.Add($taskDefenderCooldownBox)
+
+$taskTab.Controls.Add((New-Label -Text 'Defender max parallel' -X 25 -Y 740 -Width 190))
+$taskDefenderConcurrentBox = New-Object System.Windows.Forms.NumericUpDown
+$taskDefenderConcurrentBox.Minimum = 1
+$taskDefenderConcurrentBox.Maximum = 32
+$taskDefenderConcurrentBox.Value = 2
+$taskDefenderConcurrentBox.Location = New-Object System.Drawing.Point(240, 737)
+$taskTab.Controls.Add($taskDefenderConcurrentBox)
+
+$taskIncludeWemBox = New-Object System.Windows.Forms.CheckBox
+$taskIncludeWemBox.Text = 'WEM Event-Kontext'
+$taskIncludeWemBox.Location = New-Object System.Drawing.Point(430, 620)
+$taskIncludeWemBox.Size = New-Object System.Drawing.Size(200, 24)
+$taskTab.Controls.Add($taskIncludeWemBox)
+
+$taskTab.Controls.Add((New-Label -Text 'WEM Trigger %' -X 430 -Y 650 -Width 170))
+$taskWemTriggerBox = New-Object System.Windows.Forms.NumericUpDown
+$taskWemTriggerBox.Minimum = 1
+$taskWemTriggerBox.Maximum = 100
+$taskWemTriggerBox.Value = 10
+$taskWemTriggerBox.Location = New-Object System.Drawing.Point(620, 647)
+$taskTab.Controls.Add($taskWemTriggerBox)
+
+$taskTab.Controls.Add((New-Label -Text 'WEM Fenster Min.' -X 430 -Y 680 -Width 170))
+$taskWemWindowBox = New-Object System.Windows.Forms.NumericUpDown
+$taskWemWindowBox.Minimum = 1
+$taskWemWindowBox.Maximum = 240
+$taskWemWindowBox.Value = 10
+$taskWemWindowBox.Location = New-Object System.Drawing.Point(620, 677)
+$taskTab.Controls.Add($taskWemWindowBox)
+
+$taskIncludeWemTailBox = New-Object System.Windows.Forms.CheckBox
+$taskIncludeWemTailBox.Text = 'WEM Log-Tail'
+$taskIncludeWemTailBox.Location = New-Object System.Drawing.Point(430, 710)
+$taskIncludeWemTailBox.Size = New-Object System.Drawing.Size(150, 24)
+$taskTab.Controls.Add($taskIncludeWemTailBox)
+
+$taskTab.Controls.Add((New-Label -Text 'WEM Tail Zeilen' -X 430 -Y 740 -Width 170))
+$taskWemTailLinesBox = New-Object System.Windows.Forms.NumericUpDown
+$taskWemTailLinesBox.Minimum = 1
+$taskWemTailLinesBox.Maximum = 5000
+$taskWemTailLinesBox.Value = 200
+$taskWemTailLinesBox.Location = New-Object System.Drawing.Point(620, 737)
+$taskTab.Controls.Add($taskWemTailLinesBox)
+
+$task4hPresetButton = New-Button -Text '4h Preset' -X 190 -Y 785 -Width 110 -Height 34
 $taskTab.Controls.Add($task4hPresetButton)
-$task8hPresetButton = New-Button -Text '8h Preset' -X 315 -Y 595 -Width 110 -Height 34
+$task8hPresetButton = New-Button -Text '8h Preset' -X 315 -Y 785 -Width 110 -Height 34
 $taskTab.Controls.Add($task8hPresetButton)
 
-$createTaskButton = New-Button -Text 'Task einrichten' -X 25 -Y 595 -Width 150 -Height 34
+$createTaskButton = New-Button -Text 'Task einrichten' -X 25 -Y 785 -Width 150 -Height 34
 $taskTab.Controls.Add($createTaskButton)
 
 $taskHint = New-Object System.Windows.Forms.Label
 $taskHint.Text = 'Der Task wird fuer den aktuellen Windows-Benutzer mit hoechsten Rechten eingerichtet. Die GUI muss dafuer ggf. als Administrator gestartet werden.'
-$taskHint.Location = New-Object System.Drawing.Point(25, 650)
+$taskHint.Location = New-Object System.Drawing.Point(25, 840)
 $taskHint.Size = New-Object System.Drawing.Size(820, 45)
 $taskTab.Controls.Add($taskHint)
 
@@ -883,7 +1147,12 @@ $outputTab.Controls.Add($outputHint)
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 1000
 $timer.Add_Tick({
-    if (-not $script:GuiClosing -and $script:HealthCheckProcess -and $script:HealthCheckProcess.HasExited) { Complete-HealthCheckRun }
+    try {
+        if (-not $script:GuiClosing -and $script:HealthCheckProcess -and $script:HealthCheckProcess.HasExited) { Complete-HealthCheckRun }
+    }
+    catch [ObjectDisposedException] { if ($timer) { $timer.Stop() } }
+    catch [InvalidOperationException] { if ($timer) { $timer.Stop() } }
+    catch { Add-StatusLine "GUI-Timerfehler: $($_.Exception.Message)" }
 })
 
 $saveButton.Add_Click({
@@ -903,6 +1172,17 @@ $eightHourPresetButton.Add_Click({
     $runWarningBox.Value = 70
     $runCriticalBox.Value = 90
     $runMaxParallelBox.Value = 4
+    $runMaxForcedBox.Value = 10
+    $runAutoDefenderBox.Checked = $false
+    $runDefenderTriggerBox.Value = 10
+    $runDefenderSecondsBox.Value = 900
+    $runDefenderCooldownBox.Value = 120
+    $runDefenderConcurrentBox.Value = 2
+    $runIncludeWemBox.Checked = $false
+    $runWemTriggerBox.Value = 10
+    $runWemWindowBox.Value = 10
+    $runIncludeWemTailBox.Checked = $false
+    $runWemTailLinesBox.Value = 200
     $runMaxEventsBox.Value = 50
     Add-StatusLine '8h Preset gesetzt.'
 })
@@ -936,6 +1216,17 @@ $task4hPresetButton.Add_Click({
     $taskWarningBox.Value = 70
     $taskCriticalBox.Value = 90
     $taskMaxParallelBox.Value = 4
+    $taskMaxForcedBox.Value = 10
+    $taskAutoDefenderBox.Checked = $false
+    $taskDefenderTriggerBox.Value = 10
+    $taskDefenderSecondsBox.Value = 900
+    $taskDefenderCooldownBox.Value = 120
+    $taskDefenderConcurrentBox.Value = 2
+    $taskIncludeWemBox.Checked = $false
+    $taskWemTriggerBox.Value = 10
+    $taskWemWindowBox.Value = 10
+    $taskIncludeWemTailBox.Checked = $false
+    $taskWemTailLinesBox.Value = 200
     $taskExecutionLimitHoursBox.Value = 6
     $taskMaxEventsBox.Value = 50
     Add-StatusLine 'Task 4h Preset gesetzt.'
@@ -949,6 +1240,17 @@ $task8hPresetButton.Add_Click({
     $taskWarningBox.Value = 70
     $taskCriticalBox.Value = 90
     $taskMaxParallelBox.Value = 4
+    $taskMaxForcedBox.Value = 10
+    $taskAutoDefenderBox.Checked = $false
+    $taskDefenderTriggerBox.Value = 10
+    $taskDefenderSecondsBox.Value = 900
+    $taskDefenderCooldownBox.Value = 120
+    $taskDefenderConcurrentBox.Value = 2
+    $taskIncludeWemBox.Checked = $false
+    $taskWemTriggerBox.Value = 10
+    $taskWemWindowBox.Value = 10
+    $taskIncludeWemTailBox.Checked = $false
+    $taskWemTailLinesBox.Value = 200
     $taskExecutionLimitHoursBox.Value = 10
     $taskMaxEventsBox.Value = 50
     Add-StatusLine 'Task 8h Preset gesetzt.'

@@ -294,3 +294,14 @@ Ein laufender manueller HealthCheck kann im Tab **Ausfuehren** mit **HealthCheck
 Optional kann der Collector bei auffaelligem `MsMpEng.exe` automatisch ein Defender Performance Recording starten (`-AutoDefenderPerfRecording`). Gesteuert wird dies ueber `DefenderPerfTriggerServerCpuPercent`, `DefenderPerfRecordingSeconds`, `DefenderPerfCooldownMinutes` und `MaxConcurrentDefenderPerfRecordings`. Ergebnisse werden als `DefenderPerfRecordings_<RunId>.csv` und `DefenderPerfReport_<RunId>_<Server>.txt` geschrieben.
 
 Mit `-IncludeWemEventContext` sammelt der Collector bei auffaelliger WEM-CPU (`Citrix.Wem.Agent.Service`, `VUEMUIAgent` oder Kategorie `Wem`) asynchron WEM-Eventlogs im konfigurierten Zeitfenster. Optional kann mit `-IncludeWemLogTail` ein Tail bekannter WEM-Logdateien geschrieben werden. Fehler in diesen Detaildiagnosen werden protokolliert und brechen den Hauptlauf nicht ab.
+
+### GUI: neue Detaildiagnose-Optionen
+
+Die Windows-Forms-GUI zeigt die getriggerten Detaildiagnosen jetzt sowohl im Tab **Ausfuehren** als auch im Tab **Taskplanung** an. Dadurch koennen manuelle 4h/8h-Laeufe und geplante Laeufe dieselben Optionen setzen:
+
+- **Defender Recording automatisch** aktiviert `-AutoDefenderPerfRecording`.
+- **Defender Trigger %**, **Defender Sekunden**, **Defender Cooldown Min.** und **Defender max parallel** setzen die zugehoerigen Defender-Parameter.
+- **WEM Event-Kontext**, **WEM Trigger %**, **WEM Fenster Min.**, **WEM Log-Tail** und **WEM Tail Zeilen** setzen die WEM-Diagnoseparameter.
+- **Max Forced/Kategorie** setzt `-MaxForcedProcessesPerCategory` und begrenzt forced Alert-Prozesse je Kategorie.
+
+Der Button **HealthCheck stoppen** beendet den aktuell gestarteten PowerShell-Prozess, stoppt den GUI-Timer und setzt die GUI wieder in den Startzustand. Ein Abbruch kann je nach Zeitpunkt dazu fuehren, dass das CLI-Script nur die bis dahin gesammelten Daten und eine bestmoegliche Summary schreibt.
