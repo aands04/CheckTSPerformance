@@ -27,6 +27,16 @@ param(
     [double]$CpuCriticalThreshold,
     [int]$MaxParallel,
     [int]$MaxForcedProcessesPerCategory,
+    [switch]$AutoDefenderPerfRecording,
+    [double]$DefenderPerfTriggerServerCpuPercent,
+    [int]$DefenderPerfRecordingSeconds,
+    [int]$DefenderPerfCooldownMinutes,
+    [int]$MaxConcurrentDefenderPerfRecordings,
+    [switch]$IncludeWemEventContext,
+    [double]$WemTriggerServerCpuPercent,
+    [int]$WemEventWindowMinutes,
+    [switch]$IncludeWemLogTail,
+    [int]$WemLogTailLines,
     [switch]$IncludeEventLogContext,
     [switch]$IncludeEventContext,
     [switch]$AnonymizeUsers,
@@ -67,6 +77,16 @@ function New-DefaultSettings {
         CpuCriticalThreshold = 90
         MaxParallel = 4
         MaxForcedProcessesPerCategory = 10
+        AutoDefenderPerfRecording = $false
+        DefenderPerfTriggerServerCpuPercent = 10
+        DefenderPerfRecordingSeconds = 900
+        DefenderPerfCooldownMinutes = 120
+        MaxConcurrentDefenderPerfRecordings = 2
+        IncludeWemEventContext = $false
+        WemTriggerServerCpuPercent = 10
+        WemEventWindowMinutes = 10
+        IncludeWemLogTail = $false
+        WemLogTailLines = 200
         IncludeEventLogContext = $false
         IncludeEventContext = $false
         AnonymizeUsers = $false
@@ -115,6 +135,16 @@ function Merge-ParameterSettings {
     if ($PSBoundParameters.ContainsKey('CpuCriticalThreshold')) { $Settings.CpuCriticalThreshold = $CpuCriticalThreshold }
     if ($PSBoundParameters.ContainsKey('MaxParallel')) { $Settings.MaxParallel = $MaxParallel }
     if ($PSBoundParameters.ContainsKey('MaxForcedProcessesPerCategory')) { $Settings.MaxForcedProcessesPerCategory = $MaxForcedProcessesPerCategory }
+    if ($PSBoundParameters.ContainsKey('AutoDefenderPerfRecording')) { $Settings.AutoDefenderPerfRecording = [bool]$AutoDefenderPerfRecording }
+    if ($PSBoundParameters.ContainsKey('DefenderPerfTriggerServerCpuPercent')) { $Settings.DefenderPerfTriggerServerCpuPercent = $DefenderPerfTriggerServerCpuPercent }
+    if ($PSBoundParameters.ContainsKey('DefenderPerfRecordingSeconds')) { $Settings.DefenderPerfRecordingSeconds = $DefenderPerfRecordingSeconds }
+    if ($PSBoundParameters.ContainsKey('DefenderPerfCooldownMinutes')) { $Settings.DefenderPerfCooldownMinutes = $DefenderPerfCooldownMinutes }
+    if ($PSBoundParameters.ContainsKey('MaxConcurrentDefenderPerfRecordings')) { $Settings.MaxConcurrentDefenderPerfRecordings = $MaxConcurrentDefenderPerfRecordings }
+    if ($PSBoundParameters.ContainsKey('IncludeWemEventContext')) { $Settings.IncludeWemEventContext = [bool]$IncludeWemEventContext }
+    if ($PSBoundParameters.ContainsKey('WemTriggerServerCpuPercent')) { $Settings.WemTriggerServerCpuPercent = $WemTriggerServerCpuPercent }
+    if ($PSBoundParameters.ContainsKey('WemEventWindowMinutes')) { $Settings.WemEventWindowMinutes = $WemEventWindowMinutes }
+    if ($PSBoundParameters.ContainsKey('IncludeWemLogTail')) { $Settings.IncludeWemLogTail = [bool]$IncludeWemLogTail }
+    if ($PSBoundParameters.ContainsKey('WemLogTailLines')) { $Settings.WemLogTailLines = $WemLogTailLines }
     if ($PSBoundParameters.ContainsKey('Delimiter')) { $Settings.OutputDelimiter = $Delimiter }
     if ($PSBoundParameters.ContainsKey('IncludeEventLogContext')) { $Settings.IncludeEventLogContext = [bool]$IncludeEventLogContext }
     if ($PSBoundParameters.ContainsKey('IncludeEventContext')) { $Settings.IncludeEventLogContext = [bool]$IncludeEventContext; $Settings.IncludeEventContext = [bool]$IncludeEventContext }
@@ -619,6 +649,70 @@ function New-CylanceDuplicateRows {
     return $dupes
 }
 
+
+function Start-DefenderPerfRecordingJob {
+    param([string]$Server, [string]$RunId, [string]$OutputPath, [int]$Seconds, [string]$TriggerProcess, [double]$TriggerCpu, [datetime]$TriggerTime)
+    Start-Job -ScriptBlock {
+        param($Server, $RunId, $OutputPath, $Seconds, $TriggerProcess, $TriggerCpu, $TriggerTime)
+        $safeServer = $Server -replace '[^A-Za-z0-9_.-]', '_'
+        $reportPath = Join-Path $OutputPath ("DefenderPerfReport_{0}_{1}.txt" -f $RunId, $safeServer)
+        try {
+            $remote = Invoke-Command -ComputerName $Server -ScriptBlock {
+                param($RunId, $Seconds)
+                $safeComputer = $env:COMPUTERNAME -replace '[^A-Za-z0-9_.-]', '_'
+                $etlPath = Join-Path $env:TEMP ("DefenderPerfRecording_{0}_{1}.etl" -f $RunId, $safeComputer)
+                New-MpPerformanceRecording -RecordTo $etlPath -Seconds $Seconds -ErrorAction Stop | Out-Null
+                $reportText = ''
+                try { $reportText = (Get-MpPerformanceReport -Path $etlPath -ErrorAction Stop | Out-String -Width 4096) } catch { $reportText = "Get-MpPerformanceReport fehlgeschlagen: $($_.Exception.Message)" }
+                [pscustomobject]@{ EtlPath=$etlPath; ReportText=$reportText }
+            } -ArgumentList $RunId, $Seconds -ErrorAction Stop
+            $remote.ReportText | Set-Content -LiteralPath $reportPath -Encoding UTF8
+            [pscustomobject]@{ RunId=$RunId; Server=$Server; TriggerTime=$TriggerTime.ToString('s'); TriggerProcess=$TriggerProcess; TriggerCpu=$TriggerCpu; EtlPath=$remote.EtlPath; ReportPath=$reportPath; Status='OK'; ErrorMessage='' }
+        }
+        catch {
+            [pscustomobject]@{ RunId=$RunId; Server=$Server; TriggerTime=$TriggerTime.ToString('s'); TriggerProcess=$TriggerProcess; TriggerCpu=$TriggerCpu; EtlPath=''; ReportPath=$reportPath; Status='ERROR'; ErrorMessage=$_.Exception.Message }
+        }
+    } -ArgumentList $Server, $RunId, $OutputPath, $Seconds, $TriggerProcess, $TriggerCpu, $TriggerTime
+}
+
+function Start-WemEventContextJob {
+    param([string]$Server, [string]$RunId, [string]$AlertId, [datetime]$TriggerTime, [int]$WindowMinutes, [bool]$IncludeLogTail, [int]$TailLines)
+    Start-Job -ScriptBlock {
+        param($Server, $RunId, $AlertId, $TriggerTime, $WindowMinutes, $IncludeLogTail, $TailLines)
+        try {
+            Invoke-Command -ComputerName $Server -ScriptBlock {
+                param($RunId, $AlertId, $TriggerTime, $WindowMinutes, $IncludeLogTail, $TailLines)
+                $start = $TriggerTime.AddMinutes(-1 * $WindowMinutes)
+                $end = $TriggerTime.AddMinutes($WindowMinutes)
+                $logNames = @()
+                try { $logNames += Get-WinEvent -ListLog '*WEM*' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LogName } catch { }
+                $logNames += @('WEM Agent Service','Citrix WEM Agent Service','Norskale Agent Service')
+                $logNames = @($logNames | Where-Object { $_ } | Select-Object -Unique)
+                foreach ($logName in $logNames) {
+                    try {
+                        Get-WinEvent -FilterHashtable @{ LogName=$logName; StartTime=$start; EndTime=$end } -MaxEvents 200 -ErrorAction Stop | ForEach-Object {
+                            [pscustomobject]@{ RecordType='Event'; RunId=$RunId; Server=$env:COMPUTERNAME; AlertId=$AlertId; TimeCreated=$_.TimeCreated; LogName=$logName; ProviderName=$_.ProviderName; EventId=$_.Id; Level=$_.LevelDisplayName; Message=$_.Message; FileName=''; Content='' }
+                        }
+                    } catch {
+                        [pscustomobject]@{ RecordType='Event'; RunId=$RunId; Server=$env:COMPUTERNAME; AlertId=$AlertId; TimeCreated=''; LogName=$logName; ProviderName=''; EventId=''; Level=''; Message="WEM Log nicht lesbar oder nicht vorhanden: $($_.Exception.Message)"; FileName=''; Content='' }
+                    }
+                }
+                if ($IncludeLogTail) {
+                    $paths = @('C:\Program Files (x86)\Norskale','C:\Program Files (x86)\Citrix\Workspace Environment Management Agent','C:\ProgramData\Norskale','C:\ProgramData\Citrix\WEM')
+                    foreach ($base in $paths) {
+                        try {
+                            Get-ChildItem -LiteralPath $base -Filter '*.log' -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 5 | ForEach-Object {
+                                [pscustomobject]@{ RecordType='Tail'; RunId=$RunId; Server=$env:COMPUTERNAME; AlertId=$AlertId; TimeCreated=''; LogName=''; ProviderName=''; EventId=''; Level=''; Message=''; FileName=$_.FullName; Content=((Get-Content -LiteralPath $_.FullName -Tail $TailLines -ErrorAction SilentlyContinue) -join [Environment]::NewLine) }
+                            }
+                        } catch { }
+                    }
+                }
+            } -ArgumentList $RunId, $AlertId, $TriggerTime, $WindowMinutes, $IncludeLogTail, $TailLines -ErrorAction Stop
+        }
+        catch { [pscustomobject]@{ RecordType='Event'; RunId=$RunId; Server=$Server; AlertId=$AlertId; TimeCreated=''; LogName=''; ProviderName=''; EventId=''; Level=''; Message=$_.Exception.Message; FileName=''; Content='' } }
+    } -ArgumentList $Server, $RunId, $AlertId, $TriggerTime, $WindowMinutes, $IncludeLogTail, $TailLines
+}
+
 function New-ErrorServerSample {
     param([string]$Server, [string]$Message, [datetime]$Timestamp, [string]$RunId)
     [pscustomobject]@{
@@ -739,9 +833,45 @@ function New-RunSummaryText {
     return ($lines -join [Environment]::NewLine)
 }
 
+
+function Receive-DetailDiagnosticJobs {
+    param([array]$DefenderJobs, [array]$WemJobs, [string]$RawPath, [string]$RunOutputPath, [string]$RunId, [string]$Delimiter)
+    foreach ($job in @($DefenderJobs | Where-Object { $_.State -ne 'Running' })) {
+        try {
+            $rows = @(Receive-Job -Job $job -ErrorAction SilentlyContinue)
+            Export-Rows -Rows $rows -Path (Join-Path $RawPath "DefenderPerfRecordings_$RunId.csv") -Delimiter $Delimiter
+            Export-Rows -Rows $rows -Path (Join-Path $RunOutputPath 'DefenderPerfRecordings.csv') -Delimiter $Delimiter
+        } finally { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($job in @($WemJobs | Where-Object { $_.State -ne 'Running' })) {
+        try {
+            $rows = @(Receive-Job -Job $job -ErrorAction SilentlyContinue)
+            $eventRows = @($rows | Where-Object { $_.RecordType -eq 'Event' } | Select-Object RunId,Server,AlertId,TimeCreated,LogName,ProviderName,EventId,Level,Message)
+            Export-Rows -Rows $eventRows -Path (Join-Path $RawPath "WemEventContext_$RunId.csv") -Delimiter $Delimiter
+            Export-Rows -Rows $eventRows -Path (Join-Path $RunOutputPath 'WemEventContext.csv') -Delimiter $Delimiter
+            foreach ($tail in @($rows | Where-Object { $_.RecordType -eq 'Tail' -and $_.Content })) {
+                $safeServer = $tail.Server -replace '[^A-Za-z0-9_.-]', '_'
+                $stamp = (Get-Date).ToString('yyyyMMdd_HHmmss')
+                $tailPath = Join-Path $RawPath ("WemLogTail_{0}_{1}_{2}.log" -f $RunId, $safeServer, $stamp)
+                $tail.Content | Set-Content -LiteralPath $tailPath -Encoding UTF8
+            }
+        } finally { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 if ((Test-Path -LiteralPath $ConfigPath -PathType Container)) { $ConfigPath = Join-Path $ConfigPath 'settings.json' }
 $settings = Merge-ParameterSettings -Settings (Read-Settings -Path $ConfigPath)
 Ensure-SettingProperty -Settings $settings -Name 'MaxForcedProcessesPerCategory' -DefaultValue 10
+Ensure-SettingProperty -Settings $settings -Name 'AutoDefenderPerfRecording' -DefaultValue $false
+Ensure-SettingProperty -Settings $settings -Name 'DefenderPerfTriggerServerCpuPercent' -DefaultValue 10
+Ensure-SettingProperty -Settings $settings -Name 'DefenderPerfRecordingSeconds' -DefaultValue 900
+Ensure-SettingProperty -Settings $settings -Name 'DefenderPerfCooldownMinutes' -DefaultValue 120
+Ensure-SettingProperty -Settings $settings -Name 'MaxConcurrentDefenderPerfRecordings' -DefaultValue 2
+Ensure-SettingProperty -Settings $settings -Name 'IncludeWemEventContext' -DefaultValue $false
+Ensure-SettingProperty -Settings $settings -Name 'WemTriggerServerCpuPercent' -DefaultValue 10
+Ensure-SettingProperty -Settings $settings -Name 'WemEventWindowMinutes' -DefaultValue 10
+Ensure-SettingProperty -Settings $settings -Name 'IncludeWemLogTail' -DefaultValue $false
+Ensure-SettingProperty -Settings $settings -Name 'WemLogTailLines' -DefaultValue 200
 if ($settings.IncludeEventContext) { $settings.IncludeEventLogContext = $true }
 $servers = @(Read-ServerList -Path $ServerListPath)
 $rawPath = Join-Path $OutputPath 'raw'
@@ -758,6 +888,12 @@ Ensure-Directory $runOutputPath
 $runLogFile = Join-Path $logPath "RunLog_$runId.log"
 $allServerRows = @()
 $allProcessRows = @()
+$defenderJobs = @()
+$wemJobs = @()
+$defenderLastTriggerByServer = @{}
+$defenderTriggeredServers = @{}
+$defenderTriggered = $false
+$wemTriggered = $false
 $round = 0
 $endAt = $runStart.AddMinutes([int]$settings.DurationMinutes)
 if ([int]$settings.DurationMinutes -lt 1) { $endAt = $runStart }
@@ -808,6 +944,29 @@ try {
                 SecurityCpuServerPercent=$cat.SecurityCpuServerPercent; NexusCpuServerPercent=$cat.NexusCpuServerPercent; OfficeCpuServerPercent=$cat.OfficeCpuServerPercent; BrowserCpuServerPercent=$cat.BrowserCpuServerPercent; AdobeCpuServerPercent=$cat.AdobeCpuServerPercent; EdgeCpuServerPercent=$cat.EdgeCpuServerPercent; CitrixCpuServerPercent=$cat.CitrixCpuServerPercent; WemCpuServerPercent=$cat.WemCpuServerPercent; PrintingCpuServerPercent=$cat.PrintingCpuServerPercent; MonitoringCpuServerPercent=$cat.MonitoringCpuServerPercent; WindowsCpuServerPercent=$cat.WindowsCpuServerPercent; OtherCpuServerPercent=$cat.OtherCpuServerPercent
             }
             $serverRows += $serverRow
+
+            $sampleTime = [datetime]$serverSample.Timestamp
+            $msMpEng = @($item.Result.ProcessSamples | Where-Object { $_.ProcessName -eq 'MsMpEng' } | Sort-Object ProcessCpuServerPercent -Descending | Select-Object -First 1)
+            if ($settings.AutoDefenderPerfRecording -and $msMpEng -and [double]$msMpEng.ProcessCpuServerPercent -ge [double]$settings.DefenderPerfTriggerServerCpuPercent) {
+                $runningDefenderJobs = @($defenderJobs | Where-Object { $_.State -eq 'Running' }).Count
+                $cooldownOk = (-not $defenderLastTriggerByServer.ContainsKey($item.TargetServer)) -or (($sampleTime - $defenderLastTriggerByServer[$item.TargetServer]).TotalMinutes -ge [int]$settings.DefenderPerfCooldownMinutes)
+                if (-not $defenderTriggeredServers.ContainsKey($item.TargetServer) -and $cooldownOk -and $runningDefenderJobs -lt [int]$settings.MaxConcurrentDefenderPerfRecordings) {
+                    $defenderLastTriggerByServer[$item.TargetServer] = $sampleTime
+                    $defenderTriggeredServers[$item.TargetServer] = $true
+                    $defenderTriggered = $true
+                    $defenderJobs += Start-DefenderPerfRecordingJob -Server $item.TargetServer -RunId $runId -OutputPath $rawPath -Seconds ([int]$settings.DefenderPerfRecordingSeconds) -TriggerProcess 'MsMpEng' -TriggerCpu ([double]$msMpEng.ProcessCpuServerPercent) -TriggerTime $sampleTime
+                    Export-Rows -Rows @([pscustomobject]@{ RunId=$runId; Server=$item.TargetServer; TriggerTime=$sampleTime.ToString('s'); TriggerProcess='MsMpEng'; TriggerCpu=[double]$msMpEng.ProcessCpuServerPercent; EtlPath=''; ReportPath=''; Status='STARTED'; ErrorMessage='' }) -Path (Join-Path $rawPath "DefenderPerfRecordings_$runId.csv") -Delimiter $settings.OutputDelimiter
+                    Write-RunLog -Path $runLogFile -Message "Defender Performance Recording getriggert: $($item.TargetServer), MsMpEng=$($msMpEng.ProcessCpuServerPercent)%"
+                }
+            }
+            $wemCpu = [double]$cat.WemCpuServerPercent
+            $wemProc = @($item.Result.ProcessSamples | Where-Object { $_.ProcessName -in @('Citrix.Wem.Agent.Service','VUEMUIAgent') } | Sort-Object ProcessCpuServerPercent -Descending | Select-Object -First 1)
+            if ($settings.IncludeWemEventContext -and (($wemCpu -ge [double]$settings.WemTriggerServerCpuPercent) -or ($wemProc -and [double]$wemProc.ProcessCpuServerPercent -ge [double]$settings.WemTriggerServerCpuPercent))) {
+                $wemTriggered = $true
+                $wemAlertId = '{0}_{1}_{2}_WEM' -f $runId, ($item.TargetServer -replace '[^A-Za-z0-9_.-]', '_'), ($serverSample.Timestamp -replace '[:]', '')
+                $wemJobs += Start-WemEventContextJob -Server $item.TargetServer -RunId $runId -AlertId $wemAlertId -TriggerTime $sampleTime -WindowMinutes ([int]$settings.WemEventWindowMinutes) -IncludeLogTail ([bool]$settings.IncludeWemLogTail) -TailLines ([int]$settings.WemLogTailLines)
+                Write-RunLog -Path $runLogFile -Message "WEM Event Context getriggert: $($item.TargetServer), WEM=$wemCpu%"
+            }
             $rank = 1
             $rankByProcessId = @{}
             foreach ($rankedProcess in @($item.Result.ProcessSamples | Sort-Object ProcessCpuCorePercent -Descending)) {
@@ -849,6 +1008,9 @@ try {
         Export-Rows -Rows $alertRows -Path (Join-Path $runOutputPath 'AlertSamples.csv') -Delimiter $settings.OutputDelimiter
         Export-Rows -Rows $categoryRows -Path (Join-Path $runOutputPath 'CategorySummary.csv') -Delimiter $settings.OutputDelimiter
         Export-Rows -Rows $eventRows -Path (Join-Path $runOutputPath 'EventContext.csv') -Delimiter $settings.OutputDelimiter
+        Receive-DetailDiagnosticJobs -DefenderJobs $defenderJobs -WemJobs $wemJobs -RawPath $rawPath -RunOutputPath $runOutputPath -RunId $runId -Delimiter $settings.OutputDelimiter
+        $defenderJobs = @($defenderJobs | Where-Object { $_.State -eq 'Running' })
+        $wemJobs = @($wemJobs | Where-Object { $_.State -eq 'Running' })
         $allServerRows += $serverRows; $allProcessRows += $processRows
         $doneMessage = "Runde $round beendet. OK=$(@($serverRows | Where-Object Status -eq 'OK').Count), Fehler=$(@($serverRows | Where-Object Status -eq 'ERROR').Count)"
         Write-Host ("[{0}] {1}" -f (Get-Date).ToString('HH:mm:ss'), $doneMessage)
@@ -868,7 +1030,9 @@ finally {
         $categoryAggregateRows = @(New-CategoryAggregateRows -ProcessRows $allProcessRows -RunId $runId)
         Export-Rows -Rows $categoryAggregateRows -Path (Join-Path $rawPath "CategorySummaryAggregated_$runId.csv") -Delimiter $settings.OutputDelimiter
         Export-Rows -Rows $categoryAggregateRows -Path (Join-Path $runOutputPath 'CategorySummaryAggregated.csv') -Delimiter $settings.OutputDelimiter
+        Receive-DetailDiagnosticJobs -DefenderJobs $defenderJobs -WemJobs $wemJobs -RawPath $rawPath -RunOutputPath $runOutputPath -RunId $runId -Delimiter $settings.OutputDelimiter
         $runSummaryRows = @(New-RunSummaryRows -ServerRows $allServerRows -ProcessRows $allProcessRows -Start $runStart -End $runEnd -ServerCount $servers.Count)
+        foreach ($summaryRow in $runSummaryRows) { $summaryRow | Add-Member -MemberType NoteProperty -Name DefenderPerfRecordingTriggered -Value $defenderTriggered -Force; $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextTriggered -Value $wemTriggered -Force }
         $summaryCsv = Join-Path $summaryPath "RunSummary_$runId.csv"
         $summaryTxt = Join-Path $summaryPath "RunSummary_$runId.txt"
         Export-Rows -Rows $runSummaryRows -Path $summaryCsv -Delimiter $settings.OutputDelimiter

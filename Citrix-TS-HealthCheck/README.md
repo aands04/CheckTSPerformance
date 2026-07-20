@@ -288,3 +288,9 @@ Die GUI stellt die wichtigsten Collector-Parameter sowohl fuer den manuellen Sta
 ### Lauf aus der GUI abbrechen
 
 Ein laufender manueller HealthCheck kann im Tab **Ausfuehren** mit **HealthCheck stoppen** beendet werden. Die GUI fragt vorher nach einer Bestaetigung und beendet dann den gestarteten PowerShell-Prozess; bereits geschriebene CSV-/Logdaten bleiben erhalten.
+
+### Getriggerte Detaildiagnosen fuer Defender und WEM
+
+Optional kann der Collector bei auffaelligem `MsMpEng.exe` automatisch ein Defender Performance Recording starten (`-AutoDefenderPerfRecording`). Gesteuert wird dies ueber `DefenderPerfTriggerServerCpuPercent`, `DefenderPerfRecordingSeconds`, `DefenderPerfCooldownMinutes` und `MaxConcurrentDefenderPerfRecordings`. Ergebnisse werden als `DefenderPerfRecordings_<RunId>.csv` und `DefenderPerfReport_<RunId>_<Server>.txt` geschrieben.
+
+Mit `-IncludeWemEventContext` sammelt der Collector bei auffaelliger WEM-CPU (`Citrix.Wem.Agent.Service`, `VUEMUIAgent` oder Kategorie `Wem`) asynchron WEM-Eventlogs im konfigurierten Zeitfenster. Optional kann mit `-IncludeWemLogTail` ein Tail bekannter WEM-Logdateien geschrieben werden. Fehler in diesen Detaildiagnosen werden protokolliert und brechen den Hauptlauf nicht ab.
