@@ -291,7 +291,7 @@ Ein laufender manueller HealthCheck kann im Tab **Ausfuehren** mit **HealthCheck
 
 ### Getriggerte Detaildiagnosen fuer Defender und WEM
 
-Optional kann der Collector bei auffaelligem `MsMpEng.exe` automatisch ein Defender Performance Recording starten (`-AutoDefenderPerfRecording`). Gesteuert wird dies ueber `DefenderPerfTriggerServerCpuPercent`, `DefenderPerfRecordingSeconds`, `DefenderPerfCooldownMinutes` und `MaxConcurrentDefenderPerfRecordings`. Ergebnisse werden als `DefenderPerfRecordings_<RunId>.csv` und `DefenderPerfReport_<RunId>_<Server>.txt` geschrieben.
+Optional kann der Collector bei auffaelligem `MsMpEng.exe` automatisch ein Defender Performance Recording starten (`-AutoDefenderPerfRecording`). Gesteuert wird dies ueber `DefenderPerfTriggerServerCpuPercent`, `DefenderPerfRecordingSeconds`, `DefenderPerfCooldownMinutes` und `MaxConcurrentDefenderPerfRecordings`. Das Recording wird auf dem Zielserver unter `C:\ProgramData\CitrixTSHealthCheck\DefenderPerf\<RunId>\` gespeichert; die Recording-Ausgabe landet in einer `.log`-Datei statt in der Hauptkonsole. Danach werden ETL, Log, Textreport und Raw-JSON nach `<OutputPath>\DefenderPerf\<RunId>\<Server>\` kopiert und in `DefenderPerfRecordings_<RunId>.csv` referenziert.
 
 Mit `-IncludeWemEventContext` sammelt der Collector bei auffaelliger WEM-CPU (`Citrix.Wem.Agent.Service`, `VUEMUIAgent` oder Kategorie `Wem`) asynchron WEM-Eventlogs im konfigurierten Zeitfenster. Optional kann mit `-IncludeWemLogTail` ein Tail bekannter WEM-Logdateien geschrieben werden. Fehler in diesen Detaildiagnosen werden protokolliert und brechen den Hauptlauf nicht ab.
 

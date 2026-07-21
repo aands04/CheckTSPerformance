@@ -655,22 +655,79 @@ function Start-DefenderPerfRecordingJob {
     Start-Job -ScriptBlock {
         param($Server, $RunId, $OutputPath, $Seconds, $TriggerProcess, $TriggerCpu, $TriggerTime)
         $safeServer = $Server -replace '[^A-Za-z0-9_.-]', '_'
-        $reportPath = Join-Path $OutputPath ("DefenderPerfReport_{0}_{1}.txt" -f $RunId, $safeServer)
+        $triggerStamp = $TriggerTime.ToString('yyyyMMdd_HHmmss')
+        $centralFolder = Join-Path (Join-Path (Join-Path $OutputPath 'DefenderPerf') $RunId) $safeServer
+        $session = $null
         try {
-            $remote = Invoke-Command -ComputerName $Server -ScriptBlock {
-                param($RunId, $Seconds)
-                $safeComputer = $env:COMPUTERNAME -replace '[^A-Za-z0-9_.-]', '_'
-                $etlPath = Join-Path $env:TEMP ("DefenderPerfRecording_{0}_{1}.etl" -f $RunId, $safeComputer)
-                New-MpPerformanceRecording -RecordTo $etlPath -Seconds $Seconds -ErrorAction Stop | Out-Null
-                $reportText = ''
-                try { $reportText = (Get-MpPerformanceReport -Path $etlPath -ErrorAction Stop | Out-String -Width 4096) } catch { $reportText = "Get-MpPerformanceReport fehlgeschlagen: $($_.Exception.Message)" }
-                [pscustomobject]@{ EtlPath=$etlPath; ReportText=$reportText }
-            } -ArgumentList $RunId, $Seconds -ErrorAction Stop
-            $remote.ReportText | Set-Content -LiteralPath $reportPath -Encoding UTF8
-            [pscustomobject]@{ RunId=$RunId; Server=$Server; TriggerTime=$TriggerTime.ToString('s'); TriggerProcess=$TriggerProcess; TriggerCpu=$TriggerCpu; EtlPath=$remote.EtlPath; ReportPath=$reportPath; Status='OK'; ErrorMessage='' }
+            if (-not (Test-Path -LiteralPath $centralFolder)) { New-Item -ItemType Directory -Path $centralFolder -Force | Out-Null }
+            $session = New-PSSession -ComputerName $Server -ErrorAction Stop
+            $remote = Invoke-Command -Session $session -ScriptBlock {
+                param($RunId, $Seconds, $TriggerStamp, $SafeServer)
+                $remoteFolder = Join-Path 'C:\ProgramData\CitrixTSHealthCheck\DefenderPerf' $RunId
+                if (-not (Test-Path -LiteralPath $remoteFolder)) { New-Item -ItemType Directory -Path $remoteFolder -Force | Out-Null }
+                $baseName = "DefenderPerfRecording_{0}_{1}_{2}" -f $RunId, $SafeServer, $TriggerStamp
+                $etlPath = Join-Path $remoteFolder ($baseName + '.etl')
+                $logPath = Join-Path $remoteFolder ($baseName + '.log')
+                $reportTxtPath = Join-Path $remoteFolder ("DefenderPerfReport_{0}_{1}.txt" -f $RunId, $SafeServer)
+                $reportJsonPath = Join-Path $remoteFolder ("DefenderPerfReport_{0}_{1}_raw.json" -f $RunId, $SafeServer)
+                $status = 'OK'
+                $errorMessage = ''
+                try {
+                    & { New-MpPerformanceRecording -RecordTo $etlPath -Seconds $Seconds -ErrorAction Stop } *> $logPath
+                }
+                catch {
+                    $status = 'ERROR'
+                    $errorMessage = "New-MpPerformanceRecording fehlgeschlagen: $($_.Exception.Message)"
+                    try { $errorMessage | Add-Content -LiteralPath $logPath -Encoding UTF8 } catch { }
+                }
+                try {
+                    $report = Get-MpPerformanceReport -Path $etlPath -ErrorAction Stop
+                    $report | Out-String -Width 4096 | Set-Content -LiteralPath $reportTxtPath -Encoding UTF8
+                    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportJsonPath -Encoding UTF8
+                }
+                catch {
+                    if ($status -eq 'OK') { $status = 'PARTIAL' }
+                    $reportError = "Get-MpPerformanceReport fehlgeschlagen: $($_.Exception.Message)"
+                    $errorMessage = @($errorMessage, $reportError | Where-Object { $_ }) -join ' | '
+                    $reportError | Set-Content -LiteralPath $reportTxtPath -Encoding UTF8
+                    [pscustomobject]@{ Error=$reportError } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $reportJsonPath -Encoding UTF8
+                }
+                [pscustomobject]@{
+                    ComputerName=$env:COMPUTERNAME; RemoteFolder=$remoteFolder; EtlPath=$etlPath; LogPath=$logPath;
+                    ReportPath=$reportTxtPath; RawJsonPath=$reportJsonPath; Status=$status; ErrorMessage=$errorMessage
+                }
+            } -ArgumentList $RunId, $Seconds, $triggerStamp, $safeServer -ErrorAction Stop
+
+            $copied = @{}
+            foreach ($remotePath in @($remote.EtlPath, $remote.LogPath, $remote.ReportPath, $remote.RawJsonPath)) {
+                if ([string]::IsNullOrWhiteSpace([string]$remotePath)) { continue }
+                $fileName = Split-Path -Path $remotePath -Leaf
+                $destination = Join-Path $centralFolder $fileName
+                try {
+                    Copy-Item -FromSession $session -LiteralPath $remotePath -Destination $destination -Force -ErrorAction Stop
+                    $copied[$remotePath] = $destination
+                }
+                catch {
+                    if ($remote.Status -eq 'OK') { $remote.Status = 'PARTIAL' }
+                    $copyError = "Kopieren fehlgeschlagen ($remotePath): $($_.Exception.Message)"
+                    $remote.ErrorMessage = @($remote.ErrorMessage, $copyError | Where-Object { $_ }) -join ' | '
+                }
+            }
+            $etlResultPath = if ($copied.ContainsKey($remote.EtlPath)) { $copied[$remote.EtlPath] } else { $remote.EtlPath }
+            $logResultPath = if ($copied.ContainsKey($remote.LogPath)) { $copied[$remote.LogPath] } else { $remote.LogPath }
+            $reportResultPath = if ($copied.ContainsKey($remote.ReportPath)) { $copied[$remote.ReportPath] } else { $remote.ReportPath }
+            $rawJsonResultPath = if ($copied.ContainsKey($remote.RawJsonPath)) { $copied[$remote.RawJsonPath] } else { $remote.RawJsonPath }
+            [pscustomobject]@{
+                RunId=$RunId; Server=$Server; TriggerTime=$TriggerTime.ToString('s'); TriggerProcess=$TriggerProcess; TriggerCpu=$TriggerCpu;
+                EtlPath=$etlResultPath; LogPath=$logResultPath; ReportPath=$reportResultPath; RawJsonPath=$rawJsonResultPath;
+                RemoteFolder=$remote.RemoteFolder; CentralFolder=$centralFolder; Status=$remote.Status; ErrorMessage=$remote.ErrorMessage
+            }
         }
         catch {
-            [pscustomobject]@{ RunId=$RunId; Server=$Server; TriggerTime=$TriggerTime.ToString('s'); TriggerProcess=$TriggerProcess; TriggerCpu=$TriggerCpu; EtlPath=''; ReportPath=$reportPath; Status='ERROR'; ErrorMessage=$_.Exception.Message }
+            [pscustomobject]@{ RunId=$RunId; Server=$Server; TriggerTime=$TriggerTime.ToString('s'); TriggerProcess=$TriggerProcess; TriggerCpu=$TriggerCpu; EtlPath=''; LogPath=''; ReportPath=''; RawJsonPath=''; RemoteFolder=''; CentralFolder=$centralFolder; Status='ERROR'; ErrorMessage=$_.Exception.Message }
+        }
+        finally {
+            if ($session) { Remove-PSSession -Session $session -ErrorAction SilentlyContinue }
         }
     } -ArgumentList $Server, $RunId, $OutputPath, $Seconds, $TriggerProcess, $TriggerCpu, $TriggerTime
 }
@@ -954,8 +1011,8 @@ try {
                     $defenderLastTriggerByServer[$item.TargetServer] = $sampleTime
                     $defenderTriggeredServers[$item.TargetServer] = $true
                     $defenderTriggered = $true
-                    $defenderJobs += Start-DefenderPerfRecordingJob -Server $item.TargetServer -RunId $runId -OutputPath $rawPath -Seconds ([int]$settings.DefenderPerfRecordingSeconds) -TriggerProcess 'MsMpEng' -TriggerCpu ([double]$msMpEng.ProcessCpuServerPercent) -TriggerTime $sampleTime
-                    Export-Rows -Rows @([pscustomobject]@{ RunId=$runId; Server=$item.TargetServer; TriggerTime=$sampleTime.ToString('s'); TriggerProcess='MsMpEng'; TriggerCpu=[double]$msMpEng.ProcessCpuServerPercent; EtlPath=''; ReportPath=''; Status='STARTED'; ErrorMessage='' }) -Path (Join-Path $rawPath "DefenderPerfRecordings_$runId.csv") -Delimiter $settings.OutputDelimiter
+                    $defenderJobs += Start-DefenderPerfRecordingJob -Server $item.TargetServer -RunId $runId -OutputPath $OutputPath -Seconds ([int]$settings.DefenderPerfRecordingSeconds) -TriggerProcess 'MsMpEng' -TriggerCpu ([double]$msMpEng.ProcessCpuServerPercent) -TriggerTime $sampleTime
+                    Export-Rows -Rows @([pscustomobject]@{ RunId=$runId; Server=$item.TargetServer; TriggerTime=$sampleTime.ToString('s'); TriggerProcess='MsMpEng'; TriggerCpu=[double]$msMpEng.ProcessCpuServerPercent; EtlPath=''; LogPath=''; ReportPath=''; RawJsonPath=''; RemoteFolder=''; CentralFolder=(Join-Path (Join-Path (Join-Path $OutputPath 'DefenderPerf') $runId) ($item.TargetServer -replace '[^A-Za-z0-9_.-]', '_')); Status='STARTED'; ErrorMessage='' }) -Path (Join-Path $rawPath "DefenderPerfRecordings_$runId.csv") -Delimiter $settings.OutputDelimiter
                     Write-RunLog -Path $runLogFile -Message "Defender Performance Recording getriggert: $($item.TargetServer), MsMpEng=$($msMpEng.ProcessCpuServerPercent)%"
                 }
             }
