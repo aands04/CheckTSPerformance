@@ -209,6 +209,7 @@ function ConvertTo-InvariantObject {
     process {
         $copy = [ordered]@{}
         foreach ($property in $InputObject.PSObject.Properties) {
+            if ($property.Name -in @('PSComputerName','RunspaceId','PSShowComputerName')) { continue }
             $value = $property.Value
             if ($value -is [double] -or $value -is [single] -or $value -is [decimal]) {
                 $copy[$property.Name] = ([double]$value).ToString('0.##', [Globalization.CultureInfo]::InvariantCulture)
@@ -254,12 +255,38 @@ function New-DefenderPerfRecordingRow {
     [pscustomobject]$row
 }
 
+function Get-DefenderRecordingStatusRank {
+    param([string]$Status)
+    switch ($Status) {
+        'Pending' { return 1 }
+        'Running' { return 2 }
+        'Completed' { return 3 }
+        'ReportFailed' { return 4 }
+        'CopyFailed' { return 5 }
+        'Failed' { return 6 }
+        'TimedOut' { return 7 }
+        default { return 0 }
+    }
+}
+
 function Export-DefenderPerfRecordingRows {
     param([array]$Rows, [string]$RawPath, [string]$RunOutputPath, [string]$RunId, [string]$Delimiter, [string]$RunLogFile = '')
     if (-not $Rows -or $Rows.Count -eq 0) { return }
     $normalizedRows = @($Rows | ConvertTo-DefenderPerfRecordingRow)
     foreach ($path in @((Join-Path $RawPath "DefenderPerfRecordings_$RunId.csv"), (Join-Path $RunOutputPath 'DefenderPerfRecordings.csv'))) {
-        try { Export-Rows -Rows $normalizedRows -Path $path -Delimiter $Delimiter }
+        try {
+            $existingRows = @()
+            if (Test-Path -LiteralPath $path) { $existingRows = @(Import-Csv -LiteralPath $path -Delimiter $Delimiter -ErrorAction Stop | ConvertTo-DefenderPerfRecordingRow) }
+            $combinedRows = @($existingRows + $normalizedRows)
+            $dedupedRows = @(
+                $combinedRows |
+                    Group-Object { '{0}|{1}|{2}|{3}' -f $_.RunId, $_.Server, $_.TriggerTimestamp, $_.TriggerProcessName } |
+                    ForEach-Object {
+                        @($_.Group | Sort-Object @{ Expression = { Get-DefenderRecordingStatusRank -Status $_.Status } }, @{ Expression = { $_.EndTime } }, @{ Expression = { $_.StartTime } } | Select-Object -Last 1)
+                    }
+            )
+            $dedupedRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $path -Delimiter $Delimiter -NoTypeInformation -Encoding UTF8
+        }
         catch {
             if ($RunLogFile) { Write-RunLog -Path $RunLogFile -Level 'WARN' -Message "DefenderPerfRecordings Export fehlgeschlagen ($path): $($_.Exception.Message)" }
         }
@@ -606,8 +633,34 @@ function Invoke-ServerCollectionRound {
     return $results
 }
 
+
+function Normalize-TaskNameList {
+    param([string[]]$TaskNames)
+    $normalized = @()
+    foreach ($entry in @($TaskNames)) {
+        if ([string]::IsNullOrWhiteSpace([string]$entry)) { continue }
+        $entryText = [string]$entry
+        $quotedMatches = [regex]::Matches($entryText, '"([^"]+)"|''([^'']+)''')
+        if ($quotedMatches.Count -gt 1) {
+            foreach ($match in $quotedMatches) {
+                $clean = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+                $clean = $clean.Trim()
+                if (-not [string]::IsNullOrWhiteSpace($clean)) { $normalized += $clean }
+            }
+            continue
+        }
+        $parts = @($entryText -split "[,;`r`n]+")
+        foreach ($part in $parts) {
+            $clean = ([string]$part).Trim().Trim('\"').Trim("'").Trim()
+            if (-not [string]::IsNullOrWhiteSpace($clean)) { $normalized += $clean }
+        }
+    }
+    return @($normalized | Select-Object -Unique)
+}
+
 function Invoke-ScheduledTaskInventory {
     param([string[]]$Servers, [string[]]$TaskNames, [string]$RunId)
+    $taskNameList = @(Normalize-TaskNameList -TaskNames $TaskNames)
     $rows = @()
     foreach ($server in $Servers) {
         try {
@@ -629,11 +682,11 @@ function Invoke-ScheduledTaskInventory {
                         }
                     }
                 }
-            } -ArgumentList $TaskNames, $RunId -ErrorAction Stop
+            } -ArgumentList $taskNameList, $RunId -ErrorAction Stop
             $rows += $remoteRows
         }
         catch {
-            foreach ($taskName in $TaskNames) { $rows += [pscustomobject]@{ RunId=$RunId; Server=$server; TaskName=$taskName; TaskPath=''; State='ERROR'; Enabled=''; LastRunTime=''; LastTaskResult=''; NextRunTime=''; Author=''; Description=''; Actions=''; Triggers=''; Status='ERROR'; ErrorMessage=$_.Exception.Message } }
+            foreach ($taskName in $taskNameList) { $rows += [pscustomobject]@{ RunId=$RunId; Server=$server; TaskName=$taskName; TaskPath=''; State='ERROR'; Enabled=''; LastRunTime=''; LastTaskResult=''; NextRunTime=''; Author=''; Description=''; Actions=''; Triggers=''; Status='ERROR'; ErrorMessage=$_.Exception.Message } }
         }
     }
     return $rows
@@ -1316,7 +1369,7 @@ finally {
         Write-RunLog -Path $runLogFile -Message "Run beendet. EndReason=$endReason, CompletedRounds=$completedRounds, ActualDurationMinutes=$actualDurationMinutes"
         $defenderRecordingRows = @(Import-CsvIfExists -Path (Join-Path $rawPath "DefenderPerfRecordings_$runId.csv") -Delimiter $settings.OutputDelimiter)
         $wemEventRows = @(Import-CsvIfExists -Path (Join-Path $rawPath "WemEventContext_$runId.csv") -Delimiter $settings.OutputDelimiter)
-        $defenderStartedCount = @($defenderRecordingRows | Where-Object { $_.Status -eq 'Running' }).Count
+        $defenderStartedCount = @($defenderRecordingRows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.TriggerTimestamp) -and -not [string]::IsNullOrWhiteSpace([string]$_.TriggerProcessName) -and $_.Status -in @('Pending','Running','Completed','Failed','TimedOut','ReportFailed','CopyFailed') }).Count
         $defenderReportOkCount = @($defenderRecordingRows | Where-Object { $_.ReportGenerationStatus -eq 'Completed' }).Count
         $defenderCopyOkCount = @($defenderRecordingRows | Where-Object { $_.CopyStatus -eq 'Completed' }).Count
         $defenderFailedCount = @($defenderRecordingRows | Where-Object { $_.Status -in @('Failed','TimedOut','ReportFailed','CopyFailed') }).Count

@@ -273,7 +273,7 @@ Die automatisch erzeugte `RunId` hat das Format `yyyyMMdd_HHmmss_GUIDkurz`, kann
 
 Optionale Zusatzdateien:
 
-- `ScheduledTaskInventory_<RunId>.csv`: inventarisiert die konfigurierten Update-/Autostart-Tasks pro Server. Nicht vorhandene Tasks werden mit `State = NOT_FOUND` protokolliert; das Script deaktiviert keine Tasks.
+- `ScheduledTaskInventory_<RunId>.csv`: inventarisiert die konfigurierten Update-/Autostart-Tasks pro Server. `TaskNamesToCheck` wird als Liste verarbeitet; kommaseparierte Eingaben werden auf einzelne Tasks aufgeteilt. Nicht vorhandene Tasks werden mit `State = NOT_FOUND` protokolliert; das Script deaktiviert keine Tasks.
 - `CylanceHealth_<RunId>.csv`: sammelt Basisdaten zu `CylanceSvc`, `sc.exe qprotection CylanceSvc` und `C:\ProgramData\Cylance\Status\Status.json`.
 - `CylanceHealth_Duplicates_<RunId>.csv`: meldet doppelte `SerialNumber` oder `StatusDeviceName`, damit geklonte Gold-Image-Identitaeten auffallen.
 - `CategorySummaryAggregated_<RunId>.csv`: aggregierte Kategorieauswertung ueber den gesamten Lauf pro Server und Kategorie.
@@ -315,7 +315,7 @@ Der Button **HealthCheck stoppen** beendet den aktuell gestarteten PowerShell-Pr
 
 Der Collector berechnet nach optionalem Scheduled-Task-Inventory und CylanceHealth den `MeasurementStartTime`. Die harte Endzeit ist `MeasurementStartTime + DurationMinutes`; die geplante Rundenzahl bleibt `Ceiling(DurationMinutes * 60 / IntervalSeconds)`. Rundenstarts werden absolut geplant (`MeasurementStartTime`, `MeasurementStartTime + IntervalSeconds`, ...). Wenn eine Runde laenger dauert, startet die naechste faellige Runde sofort ohne zusaetzliche Pause; nach `HardEndTime` oder `MaxRounds` wird keine neue Runde gestartet. `RunSummary_<RunId>.csv` enthaelt `EndReason`, `PlannedDurationMinutes`, `ActualDurationMinutes`, `PlannedRounds` und `CompletedRounds`.
 
-Defender Performance Recordings laufen als Background-Jobs. Neue Recordings werden nicht mehr gestartet, wenn die `HardEndTime` erreicht ist oder weniger als `DefenderPerfRecordingSeconds + 60` Sekunden Restzeit verfuegbar sind; das RunLog meldet dann `Defender Recording skipped: insufficient remaining time`. Am Ende wartet der Hauptlauf nur bis `DefenderPerfFinalWaitSeconds` (Default 120) beziehungsweise insgesamt maximal `FinalizationTimeoutSeconds` (Default 300) auf Detaildiagnosen; offene Defender-Jobs werden als `TimedOut` in `DefenderPerfRecordings_<RunId>.csv` protokolliert.
+Defender Performance Recordings laufen als Background-Jobs. Neue Recordings werden nicht mehr gestartet, wenn die `HardEndTime` erreicht ist oder weniger als `DefenderPerfRecordingSeconds + 60` Sekunden Restzeit verfuegbar sind; das RunLog meldet dann `Defender Recording skipped: insufficient remaining time`. Am Ende wartet der Hauptlauf nur bis `DefenderPerfFinalWaitSeconds` (Default 120) beziehungsweise insgesamt maximal `FinalizationTimeoutSeconds` (Default 300) auf Detaildiagnosen; offene Defender-Jobs werden als `TimedOut` in `DefenderPerfRecordings_<RunId>.csv` protokolliert. `DefenderPerfRecordings_<RunId>.csv` wird pro `RunId + Server + TriggerTimestamp + TriggerProcessName` dedupliziert, sodass Pending-/Completed-Status nicht als doppelte logische Recordings stehen bleiben.
 
 
 ### Defender Trigger- und Reportdetails
