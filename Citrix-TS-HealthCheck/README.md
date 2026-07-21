@@ -305,3 +305,10 @@ Die Windows-Forms-GUI zeigt die getriggerten Detaildiagnosen jetzt sowohl im Tab
 - **Max Forced/Kategorie** setzt `-MaxForcedProcessesPerCategory` und begrenzt forced Alert-Prozesse je Kategorie.
 
 Der Button **HealthCheck stoppen** beendet den aktuell gestarteten PowerShell-Prozess, stoppt den GUI-Timer und setzt die GUI wieder in den Startzustand. Ein Abbruch kann je nach Zeitpunkt dazu fuehren, dass das CLI-Script nur die bis dahin gesammelten Daten und eine bestmoegliche Summary schreibt.
+
+
+### Laufzeitgrenze und Finalisierung
+
+Der Collector berechnet beim Start eine harte Endzeit (`StartTime + DurationMinutes`) und die geplante Rundenzahl (`Ceiling(DurationMinutes * 60 / IntervalSeconds)`). Vor und nach jeder Runde wird geprueft, ob `HardEndTime` oder `MaxRounds` erreicht sind; danach wird keine weitere Runde gestartet. `RunSummary_<RunId>.csv` enthaelt `EndReason`, `PlannedDurationMinutes`, `ActualDurationMinutes`, `PlannedRounds` und `CompletedRounds`.
+
+Defender Performance Recordings laufen als Background-Jobs. Am Ende wartet der Hauptlauf nur bis `DefenderPerfFinalWaitSeconds` (Default 120) beziehungsweise insgesamt maximal `FinalizationTimeoutSeconds` (Default 300) auf Detaildiagnosen; offene Defender-Jobs werden als `TimedOut` in `DefenderPerfRecordings_<RunId>.csv` protokolliert.

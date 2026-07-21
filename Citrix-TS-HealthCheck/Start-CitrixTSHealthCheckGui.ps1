@@ -88,6 +88,8 @@ function Read-SettingsFile {
             DefenderPerfRecordingSeconds = 900
             DefenderPerfCooldownMinutes = 120
             MaxConcurrentDefenderPerfRecordings = 2
+            DefenderPerfFinalWaitSeconds = 120
+            FinalizationTimeoutSeconds = 300
             IncludeWemEventContext = $false
             WemTriggerServerCpuPercent = 10
             WemEventWindowMinutes = 10
@@ -164,6 +166,8 @@ function Save-SettingsFile {
     $defaultTaskNames = @('nWizard_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}','Adobe Acrobat Update Task','MicrosoftEdgeUpdateTaskMachineUA','Launch Adobe CCXProcess','LexwareAppSysOpt','Office Automatic Updates 2.0','Office Feature Updates','Office Feature Updates Logon','BackgroundDownload')
     $existingTaskNames = @(Get-SettingValue -Settings $existing -Name 'TaskNamesToCheck' -DefaultValue $defaultTaskNames)
     $taskNames = if ($TaskNamesToCheck -and $TaskNamesToCheck.Count -gt 0) { @($TaskNamesToCheck) } elseif ($existingTaskNames -and $existingTaskNames.Count -gt 0) { @($existingTaskNames) } else { $defaultTaskNames }
+    $defenderPerfFinalWaitSeconds = [int](Get-SettingValue -Settings $existing -Name 'DefenderPerfFinalWaitSeconds' -DefaultValue 120)
+    $finalizationTimeoutSeconds = [int](Get-SettingValue -Settings $existing -Name 'FinalizationTimeoutSeconds' -DefaultValue 300)
     $settings = [ordered]@{
         DurationMinutes = $DurationMinutes
         IntervalSeconds = $IntervalSeconds
@@ -179,6 +183,8 @@ function Save-SettingsFile {
         DefenderPerfRecordingSeconds = $DefenderPerfRecordingSeconds
         DefenderPerfCooldownMinutes = $DefenderPerfCooldownMinutes
         MaxConcurrentDefenderPerfRecordings = $MaxConcurrentDefenderPerfRecordings
+        DefenderPerfFinalWaitSeconds = $defenderPerfFinalWaitSeconds
+        FinalizationTimeoutSeconds = $finalizationTimeoutSeconds
         IncludeWemEventContext = $IncludeWemEventContext
         WemTriggerServerCpuPercent = $WemTriggerServerCpuPercent
         WemEventWindowMinutes = $WemEventWindowMinutes
