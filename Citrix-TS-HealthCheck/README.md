@@ -319,3 +319,8 @@ Defender Performance Recordings laufen als Background-Jobs. Am Ende wartet der H
 `AutoDefenderPerfRecording` startet ausschliesslich bei `MsMpEng.exe`, wenn `ProcessCpuServerPercent` im aktuellen Sample groesser oder gleich `DefenderPerfTriggerServerCpuPercent` ist. `MsSense.exe`, `SenseNdr.exe`, `CylanceSvc.exe` und die Security-Gesamtkategorie loesen kein Defender Recording aus.
 
 Defender-Dateien werden auf dem Zielserver unter `DefenderPerfLocalRoot\<RunId>\<Server>\` abgelegt und optional nach `<OutputPath>\DefenderPerf\<RunId>\<Server>\` kopiert. `DefenderPerfRecordings_<RunId>.csv` enthaelt Triggerprozess, Trigger-CPU, Schwellwert, lokale und zentrale Pfade sowie Report-/Copy-Status.
+
+
+### Taskplanung in der GUI
+
+Beim Erstellen eines geplanten HealthChecks legt die GUI den Task im Task-Scheduler-Unterordner `TS Health Checks` an und haengt dem eingegebenen Basisnamen automatisch einen Zeitstempel im Format `yyyyMMdd_HHmmss` an. Nach erfolgreicher Registrierung erscheint eine Erfolgsmeldung mit vollstaendigem Taskpfad und Namen.

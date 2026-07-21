@@ -444,8 +444,12 @@ function Register-HealthCheckScheduledTask {
     $scriptPath = Join-ProjectPath -ChildPath @('Invoke-CitrixTSHealthCheck.ps1')
     if (-not (Test-Path -LiteralPath $scriptPath)) { throw "HealthCheck-Script nicht gefunden: $scriptPath" }
 
-    $taskName = $taskNameBox.Text.Trim()
-    if (-not $taskName) { throw 'Bitte einen Tasknamen angeben.' }
+    $taskNameBase = $taskNameBox.Text.Trim()
+    if (-not $taskNameBase) { throw 'Bitte einen Tasknamen angeben.' }
+    $taskNameSafe = $taskNameBase -replace '[\\/:*?"<>|]', '_'
+    $taskTimestamp = (Get-Date).ToString('yyyyMMdd_HHmmss')
+    $taskName = '{0}_{1}' -f $taskNameSafe, $taskTimestamp
+    $taskPath = '\TS Health Checks\'
 
     $actionArguments = @(
         '-NoProfile',
@@ -499,8 +503,10 @@ function Register-HealthCheckScheduledTask {
     $principalUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
     $principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType Interactive -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours ([int]$taskExecutionLimitHoursBox.Value))
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Add-StatusLine "Scheduled Task eingerichtet: $taskName"
+    Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    $successMessage = "Scheduled Task eingerichtet: $taskPath$taskName"
+    Add-StatusLine $successMessage
+    [System.Windows.Forms.MessageBox]::Show($successMessage, 'Task erfolgreich eingerichtet', 'OK', 'Information') | Out-Null
 }
 
 
