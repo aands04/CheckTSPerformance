@@ -57,6 +57,11 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $script:InvocationPath = $MyInvocation.MyCommand.Path
+# Snapshot der scriptweiten BoundParameters: innerhalb von Funktionen haette `$PSBoundParameters`
+# sonst nur die Funktionsparameter und CLI-/GUI-Werte wuerden von settings.json ueberschrieben.
+$script:CliBoundParameters = @{}
+foreach ($key in $PSBoundParameters.Keys) { $script:CliBoundParameters[$key] = $PSBoundParameters[$key] }
+$script:SettingSources = @{}
 
 
 function Resolve-ScriptRoot {
@@ -112,10 +117,15 @@ function New-DefaultSettings {
 function Read-Settings {
     param([string]$Path)
     $settings = New-DefaultSettings
+    $script:SettingSources = @{}
+    foreach ($property in $settings.PSObject.Properties.Name) { $script:SettingSources[$property] = 'Default' }
     if (Test-Path -LiteralPath $Path) {
         $json = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
         foreach ($property in $settings.PSObject.Properties.Name) {
-            if ($json.PSObject.Properties.Name -contains $property -and $null -ne $json.$property) { $settings.$property = $json.$property }
+            if ($json.PSObject.Properties.Name -contains $property -and $null -ne $json.$property) {
+                $settings.$property = $json.$property
+                $script:SettingSources[$property] = 'Config'
+            }
         }
     }
     return $settings
@@ -126,49 +136,58 @@ function Ensure-SettingProperty {
     param($Settings, [string]$Name, $DefaultValue)
     if (-not ($Settings.PSObject.Properties.Name -contains $Name)) {
         $Settings | Add-Member -MemberType NoteProperty -Name $Name -Value $DefaultValue
+        $script:SettingSources[$Name] = 'Default'
     }
     elseif ($null -eq $Settings.$Name) {
         $Settings.$Name = $DefaultValue
+        if (-not $script:SettingSources.ContainsKey($Name)) { $script:SettingSources[$Name] = 'Default' }
+    }
+}
+
+function Set-SettingFromBoundParameter {
+    param($Settings, [string]$SettingName, [string]$ParameterName = $SettingName, [switch]$AsBoolean)
+    if ($script:CliBoundParameters.ContainsKey($ParameterName)) {
+        if ($AsBoolean) { $Settings.$SettingName = [bool]$script:CliBoundParameters[$ParameterName] }
+        else { $Settings.$SettingName = $script:CliBoundParameters[$ParameterName] }
+        $script:SettingSources[$SettingName] = 'CLI'
     }
 }
 
 function Merge-ParameterSettings {
     param($Settings)
-    if ($PSBoundParameters.ContainsKey('DurationMinutes')) { $Settings.DurationMinutes = $DurationMinutes }
-    if ($PSBoundParameters.ContainsKey('IntervalSeconds')) { $Settings.IntervalSeconds = $IntervalSeconds }
-    if ($PSBoundParameters.ContainsKey('CpuSampleSeconds')) { $Settings.CpuSampleSeconds = $CpuSampleSeconds }
-    if ($PSBoundParameters.ContainsKey('TopProcessCount')) { $Settings.TopProcessCount = $TopProcessCount }
-    if ($PSBoundParameters.ContainsKey('AlertTopProcessCount')) { $Settings.AlertTopProcessCount = $AlertTopProcessCount }
-    if ($PSBoundParameters.ContainsKey('CpuWarningThreshold')) { $Settings.CpuWarningThreshold = $CpuWarningThreshold }
-    if ($PSBoundParameters.ContainsKey('CpuCriticalThreshold')) { $Settings.CpuCriticalThreshold = $CpuCriticalThreshold }
-    if ($PSBoundParameters.ContainsKey('MaxParallel')) { $Settings.MaxParallel = $MaxParallel }
-    if ($PSBoundParameters.ContainsKey('MaxForcedProcessesPerCategory')) { $Settings.MaxForcedProcessesPerCategory = $MaxForcedProcessesPerCategory }
-    if ($PSBoundParameters.ContainsKey('AutoDefenderPerfRecording')) { $Settings.AutoDefenderPerfRecording = [bool]$AutoDefenderPerfRecording }
-    if ($PSBoundParameters.ContainsKey('DefenderPerfTriggerServerCpuPercent')) { $Settings.DefenderPerfTriggerServerCpuPercent = $DefenderPerfTriggerServerCpuPercent }
-    if ($PSBoundParameters.ContainsKey('DefenderPerfRecordingSeconds')) { $Settings.DefenderPerfRecordingSeconds = $DefenderPerfRecordingSeconds }
-    if ($PSBoundParameters.ContainsKey('DefenderPerfCooldownMinutes')) { $Settings.DefenderPerfCooldownMinutes = $DefenderPerfCooldownMinutes }
-    if ($PSBoundParameters.ContainsKey('MaxConcurrentDefenderPerfRecordings')) { $Settings.MaxConcurrentDefenderPerfRecordings = $MaxConcurrentDefenderPerfRecordings }
-    if ($PSBoundParameters.ContainsKey('DefenderPerfFinalWaitSeconds')) { $Settings.DefenderPerfFinalWaitSeconds = $DefenderPerfFinalWaitSeconds }
-    if ($PSBoundParameters.ContainsKey('FinalizationTimeoutSeconds')) { $Settings.FinalizationTimeoutSeconds = $FinalizationTimeoutSeconds }
-    if ($PSBoundParameters.ContainsKey('DefenderPerfLocalRoot')) { $Settings.DefenderPerfLocalRoot = $DefenderPerfLocalRoot }
-    if ($PSBoundParameters.ContainsKey('DefenderPerfCopyToOutputPath')) { $Settings.DefenderPerfCopyToOutputPath = [bool]$DefenderPerfCopyToOutputPath }
-    if ($PSBoundParameters.ContainsKey('IncludeWemEventContext')) { $Settings.IncludeWemEventContext = [bool]$IncludeWemEventContext }
-    if ($PSBoundParameters.ContainsKey('WemTriggerServerCpuPercent')) { $Settings.WemTriggerServerCpuPercent = $WemTriggerServerCpuPercent }
-    if ($PSBoundParameters.ContainsKey('WemEventWindowMinutes')) { $Settings.WemEventWindowMinutes = $WemEventWindowMinutes }
-    if ($PSBoundParameters.ContainsKey('IncludeWemLogTail')) { $Settings.IncludeWemLogTail = [bool]$IncludeWemLogTail }
-    if ($PSBoundParameters.ContainsKey('WemLogTailLines')) { $Settings.WemLogTailLines = $WemLogTailLines }
-    if ($PSBoundParameters.ContainsKey('Delimiter')) { $Settings.OutputDelimiter = $Delimiter }
-    if ($PSBoundParameters.ContainsKey('IncludeEventLogContext')) { $Settings.IncludeEventLogContext = [bool]$IncludeEventLogContext }
-    if ($PSBoundParameters.ContainsKey('IncludeEventContext')) { $Settings.IncludeEventLogContext = [bool]$IncludeEventContext; $Settings.IncludeEventContext = [bool]$IncludeEventContext }
-    if ($PSBoundParameters.ContainsKey('AnonymizeUsers')) { $Settings.AnonymizeUsers = [bool]$AnonymizeUsers }
-    if ($PSBoundParameters.ContainsKey('MaxEventsPerAlert')) { $Settings.MaxEventsPerAlert = $MaxEventsPerAlert }
-    if ($PSBoundParameters.ContainsKey('ImageVersion')) { $Settings.ImageVersion = $ImageVersion }
-    if ($PSBoundParameters.ContainsKey('Notes')) { $Settings.Notes = $Notes }
-    if ($PSBoundParameters.ContainsKey('RunId')) { $Settings.RunId = $RunId }
-    if ($PSBoundParameters.ContainsKey('IncludeScheduledTaskInventory')) { $Settings.IncludeScheduledTaskInventory = [bool]$IncludeScheduledTaskInventory }
-    if ($PSBoundParameters.ContainsKey('IncludeCylanceHealth')) { $Settings.IncludeCylanceHealth = [bool]$IncludeCylanceHealth }
-    if ($PSBoundParameters.ContainsKey('TaskNamesToCheck')) { $Settings.TaskNamesToCheck = $TaskNamesToCheck }
+    foreach ($name in @('DurationMinutes','IntervalSeconds','CpuSampleSeconds','TopProcessCount','AlertTopProcessCount','CpuWarningThreshold','CpuCriticalThreshold','MaxParallel','MaxForcedProcessesPerCategory','DefenderPerfTriggerServerCpuPercent','DefenderPerfRecordingSeconds','DefenderPerfCooldownMinutes','MaxConcurrentDefenderPerfRecordings','DefenderPerfFinalWaitSeconds','FinalizationTimeoutSeconds','DefenderPerfLocalRoot','WemTriggerServerCpuPercent','WemEventWindowMinutes','WemLogTailLines','MaxEventsPerAlert','ImageVersion','Notes','RunId','TaskNamesToCheck')) {
+        Set-SettingFromBoundParameter -Settings $Settings -SettingName $name
+    }
+    foreach ($name in @('AutoDefenderPerfRecording','DefenderPerfCopyToOutputPath','IncludeWemEventContext','IncludeWemLogTail','IncludeEventLogContext','AnonymizeUsers','IncludeScheduledTaskInventory','IncludeCylanceHealth')) {
+        Set-SettingFromBoundParameter -Settings $Settings -SettingName $name -AsBoolean
+    }
+    if ($script:CliBoundParameters.ContainsKey('Delimiter')) {
+        $Settings.OutputDelimiter = $script:CliBoundParameters['Delimiter']
+        $script:SettingSources['OutputDelimiter'] = 'CLI'
+    }
+    if ($script:CliBoundParameters.ContainsKey('IncludeEventContext')) {
+        $Settings.IncludeEventLogContext = [bool]$script:CliBoundParameters['IncludeEventContext']
+        $Settings.IncludeEventContext = [bool]$script:CliBoundParameters['IncludeEventContext']
+        $script:SettingSources['IncludeEventLogContext'] = 'CLI'
+        $script:SettingSources['IncludeEventContext'] = 'CLI'
+    }
     return $Settings
+}
+
+function Get-SettingSource {
+    param([string]$Name)
+    if ($script:SettingSources.ContainsKey($Name)) { return $script:SettingSources[$Name] }
+    return 'Default'
+}
+
+function Write-EffectiveConfiguration {
+    param($Settings, [string]$RunLogFile, [datetime]$HardEndTime, [int]$MaxRounds)
+    Write-RunLog -Path $RunLogFile -Message 'Effective Configuration:'
+    foreach ($name in @('DurationMinutes','IntervalSeconds','CpuSampleSeconds','TopProcessCount','AlertTopProcessCount','CpuWarningThreshold','CpuCriticalThreshold','MaxParallel','MaxForcedProcessesPerCategory','DefenderPerfTriggerServerCpuPercent','DefenderPerfRecordingSeconds','DefenderPerfCooldownMinutes','MaxConcurrentDefenderPerfRecordings','DefenderPerfFinalWaitSeconds','FinalizationTimeoutSeconds','WemTriggerServerCpuPercent','WemEventWindowMinutes','IncludeWemEventContext','AutoDefenderPerfRecording')) {
+        Write-RunLog -Path $RunLogFile -Message ("Effective Configuration: {0}={1} Source={2}" -f $name, $Settings.$name, (Get-SettingSource -Name $name))
+    }
+    Write-RunLog -Path $RunLogFile -Message ("Effective Configuration: MaxRounds={0} Source=Calculated" -f $MaxRounds)
+    Write-RunLog -Path $RunLogFile -Message ("Effective Configuration: HardEndTime={0} Source=Calculated" -f $HardEndTime.ToString('s'))
 }
 
 function Read-ServerList {
@@ -1091,6 +1110,7 @@ $endReason = 'Completed'
 $runError = $null
 
 try {
+    Write-EffectiveConfiguration -Settings $settings -RunLogFile $runLogFile -HardEndTime $hardEndTime -MaxRounds $maxRounds
     Write-RunLog -Path $runLogFile -Message "Run gestartet. Server=$($servers.Count), DurationMinutes=$($settings.DurationMinutes), IntervalSeconds=$($settings.IntervalSeconds), MaxParallel=$($settings.MaxParallel), StartTime=$($runStart.ToString('s')), HardEndTime=$($hardEndTime.ToString('s')), MaxRounds=$maxRounds, DefenderPerfLocalRoot=$($settings.DefenderPerfLocalRoot), DefenderPerfTriggerServerCpuPercent=$($settings.DefenderPerfTriggerServerCpuPercent), DefenderPerfRecordingSeconds=$($settings.DefenderPerfRecordingSeconds), DefenderPerfCooldownMinutes=$($settings.DefenderPerfCooldownMinutes), MaxConcurrentDefenderPerfRecordings=$($settings.MaxConcurrentDefenderPerfRecordings), DefenderPerfFinalWaitSeconds=$($settings.DefenderPerfFinalWaitSeconds), FinalizationTimeoutSeconds=$($settings.FinalizationTimeoutSeconds), WemTriggerServerCpuPercent=$($settings.WemTriggerServerCpuPercent), WemEventWindowMinutes=$($settings.WemEventWindowMinutes)"
     if ($settings.IncludeScheduledTaskInventory) {
         Write-RunLog -Path $runLogFile -Message 'ScheduledTaskInventory gestartet.'

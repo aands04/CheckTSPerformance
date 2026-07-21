@@ -281,9 +281,13 @@ Optionale Zusatzdateien:
 
 Die Kategorisierung beruecksichtigt neben dem Prozessnamen auch Pfad und CommandLine. Nexus-Prozesse unter `C:\Program Files (x86)\Nexus\Prog\`, Adobe-Prozesse unter `*\Adobe\*`, Citrix-/Workspace-/WEM-Prozesse unter `*\Citrix\*`, Edge/WebView2, Office sowie Monitoring-Prozesse wie `uberAgent`, `wsmprovhost`, `WmiPrvSE`, `powershell` und `pwsh` werden konsistent in Raw-, Alert-, Server- und Kategorieausgaben markiert.
 
+### Parameter-Prioritaet und Effective Configuration
+
+Beim Start gilt eine feste Reihenfolge: explizite CLI-/GUI-Parameter haben Vorrang vor `config\settings.json`; die Config ueberschreibt nur Werte, die nicht als Parameter uebergeben wurden; Script-Defaults gelten nur, wenn weder CLI/GUI noch Config einen Wert setzt. Das RunLog schreibt deshalb am Anfang einen Block `Effective Configuration` mit Wert und Quelle (`CLI`, `Config`, `Default` oder `Calculated`). Damit muss z. B. ein Start mit `-DurationMinutes 20 -IntervalSeconds 300 -DefenderPerfTriggerServerCpuPercent 1 -DefenderPerfRecordingSeconds 300 -DefenderPerfCooldownMinutes 60` im Log `DurationMinutes=20 Source=CLI`, `MaxRounds=4 Source=Calculated` und die Defender-Werte mit `Source=CLI` zeigen; Runde 5 darf dann nicht mehr starten.
+
 ### GUI: alle Collector-Optionen setzen
 
-Die GUI stellt die wichtigsten Collector-Parameter sowohl fuer den manuellen Start als auch fuer geplante Tasks bereit: Laufdauer, Intervall, CPU-Delta, Top-Prozess-Anzahlen, Warn-/Kritisch-Schwellen, Parallelitaet, EventContext/MaxEvents, Anonymisierung, `ImageVersion`, `Notes`, optionale `RunId`, Scheduled-Task-Inventar, Cylance/Aurora-Health und die Liste `TaskNamesToCheck`. Der erzeugte PowerShell-Aufruf wird im Statusfenster protokolliert, damit nachvollziehbar ist, welche Optionen tatsaechlich gestartet oder im Taskplaner hinterlegt wurden.
+Die GUI stellt die wichtigsten Collector-Parameter sowohl fuer den manuellen Start als auch fuer geplante Tasks bereit: Laufdauer, Intervall, CPU-Delta, Top-Prozess-Anzahlen, Warn-/Kritisch-Schwellen, Parallelitaet, EventContext/MaxEvents, Anonymisierung, `ImageVersion`, `Notes`, optionale `RunId`, Scheduled-Task-Inventar, Cylance/Aurora-Health und die Liste `TaskNamesToCheck`. Der erzeugte PowerShell-Aufruf wird im Statusfenster protokolliert, damit nachvollziehbar ist, welche Optionen tatsaechlich gestartet oder im Taskplaner hinterlegt wurden. Bei der Taskplanung wird dieselbe vollstaendige Commandline zusaetzlich als `TaskCommandLine_<Zeitstempel>.txt` unter `output\logs` gespeichert.
 
 ### Lauf aus der GUI abbrechen
 

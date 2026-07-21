@@ -489,7 +489,25 @@ function Register-HealthCheckScheduledTask {
     if ($taskIncludeWemTailBox.Checked) { $actionArguments += '-IncludeWemLogTail' }
     if ($taskAnonymizeBox.Checked) { $actionArguments += '-AnonymizeUsers' }
     $actionArguments = $actionArguments -join ' '
-    Add-StatusLine ("Task PowerShell-Aufruf: powershell.exe $actionArguments")
+    $taskCommandLine = "powershell.exe $actionArguments"
+    Add-StatusLine ("Task PowerShell-Aufruf: $taskCommandLine")
+    $taskCommandLinePath = $null
+    try {
+        $taskCommandLogPath = [IO.Path]::Combine($outputPathBox.Text, 'logs')
+        if (-not (Test-Path -LiteralPath $taskCommandLogPath)) { [IO.Directory]::CreateDirectory($taskCommandLogPath) | Out-Null }
+        $taskCommandLinePath = [IO.Path]::Combine($taskCommandLogPath, ("TaskCommandLine_{0}.txt" -f $taskTimestamp))
+        @(
+            "Created=$(Get-Date -Format s)",
+            "TaskPath=$taskPath",
+            "TaskName=$taskName",
+            "StartTime=$($taskStartPicker.Value.ToString('s'))",
+            "CommandLine=$taskCommandLine"
+        ) | Set-Content -LiteralPath $taskCommandLinePath -Encoding UTF8
+        Add-StatusLine ("TaskCommandLine gespeichert: $taskCommandLinePath")
+    }
+    catch {
+        Add-StatusLine ("TaskCommandLine konnte nicht gespeichert werden: $($_.Exception.Message)")
+    }
 
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $actionArguments -WorkingDirectory $ProjectRoot
     if ($taskRepeatEnabledBox.Checked) {
@@ -505,6 +523,7 @@ function Register-HealthCheckScheduledTask {
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours ([int]$taskExecutionLimitHoursBox.Value))
     Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     $successMessage = "Scheduled Task eingerichtet: $taskPath$taskName"
+    if ($taskCommandLinePath) { $successMessage = "$successMessage`r`nTaskCommandLine: $taskCommandLinePath" }
     Add-StatusLine $successMessage
     [System.Windows.Forms.MessageBox]::Show($successMessage, 'Task erfolgreich eingerichtet', 'OK', 'Information') | Out-Null
 }
