@@ -225,6 +225,47 @@ function Export-Rows {
     $Rows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $Path -Delimiter $Delimiter -NoTypeInformation -Append -Encoding UTF8
 }
 
+
+$script:DefenderPerfRecordingColumns = @(
+    'RunId','Server','TriggerTimestamp','TriggerProcessName','TriggerProcessCpuServerPercent','TriggerThreshold','TriggerReason',
+    'Status','StartTime','EndTime','DurationSeconds','EtlLocalPath','LogLocalPath','ReportTxtLocalPath','ReportJsonLocalPath',
+    'EtlCentralPath','LogCentralPath','ReportTxtCentralPath','ReportJsonCentralPath','ReportGenerationStatus','CopyStatus','ErrorMessage'
+)
+
+function ConvertTo-DefenderPerfRecordingRow {
+    param([Parameter(ValueFromPipeline=$true)]$InputObject)
+    process {
+        $row = [ordered]@{}
+        foreach ($column in $script:DefenderPerfRecordingColumns) {
+            if ($null -ne $InputObject -and $InputObject.PSObject.Properties.Name -contains $column) { $row[$column] = $InputObject.$column }
+            else { $row[$column] = '' }
+        }
+        [pscustomobject]$row
+    }
+}
+
+function New-DefenderPerfRecordingRow {
+    param([hashtable]$Values)
+    $row = [ordered]@{}
+    foreach ($column in $script:DefenderPerfRecordingColumns) {
+        if ($Values.ContainsKey($column)) { $row[$column] = $Values[$column] }
+        else { $row[$column] = '' }
+    }
+    [pscustomobject]$row
+}
+
+function Export-DefenderPerfRecordingRows {
+    param([array]$Rows, [string]$RawPath, [string]$RunOutputPath, [string]$RunId, [string]$Delimiter, [string]$RunLogFile = '')
+    if (-not $Rows -or $Rows.Count -eq 0) { return }
+    $normalizedRows = @($Rows | ConvertTo-DefenderPerfRecordingRow)
+    foreach ($path in @((Join-Path $RawPath "DefenderPerfRecordings_$RunId.csv"), (Join-Path $RunOutputPath 'DefenderPerfRecordings.csv'))) {
+        try { Export-Rows -Rows $normalizedRows -Path $path -Delimiter $Delimiter }
+        catch {
+            if ($RunLogFile) { Write-RunLog -Path $RunLogFile -Level 'WARN' -Message "DefenderPerfRecordings Export fehlgeschlagen ($path): $($_.Exception.Message)" }
+        }
+    }
+}
+
 function Write-RunLog {
     param([string]$Path, [string]$Message, [string]$Level = 'INFO')
     $line = '{0};{1};{2}' -f (Get-Date).ToString('s'), $Level, $Message
@@ -696,6 +737,7 @@ function Start-DefenderPerfRecordingJob {
     )
     $job = Start-Job -ScriptBlock {
         param($Server, $RunId, $OutputPath, $LocalRoot, $CopyToOutputPath, $Seconds, $TriggerProcess, $TriggerCpu, $TriggerThreshold, $TriggerTime)
+        $jobStartTime = Get-Date
         $safeServer = $Server -replace '[^A-Za-z0-9_.-]', '_'
         $triggerStamp = $TriggerTime.ToString('yyyyMMdd_HHmmss')
         $centralFolder = Join-Path (Join-Path (Join-Path $OutputPath 'DefenderPerf') $RunId) $safeServer
@@ -776,17 +818,19 @@ function Start-DefenderPerfRecordingJob {
             $logResultPath = if ($centralPaths['Log']) { $centralPaths['Log'] } else { $remote.LogLocalPath }
             $reportResultPath = if ($centralPaths['ReportTxt']) { $centralPaths['ReportTxt'] } else { $remote.ReportTxtLocalPath }
             $rawJsonResultPath = if ($centralPaths['ReportJson']) { $centralPaths['ReportJson'] } else { $remote.ReportJsonLocalPath }
-            [pscustomobject]@{
-                RunId=$RunId; Server=$Server; TriggerTimestamp=$TriggerTime.ToString('s'); TriggerTime=$TriggerTime.ToString('s');
-                TriggerProcessName=$TriggerProcess; TriggerProcess=$TriggerProcess; TriggerProcessCpuServerPercent=$TriggerCpu; TriggerCpu=$TriggerCpu; TriggerThreshold=$TriggerThreshold; TriggerReason='MsMpEng ProcessCpuServerPercent >= DefenderPerfTriggerServerCpuPercent';
+            $jobEndTime = Get-Date
+            [pscustomobject][ordered]@{
+                RunId=$RunId; Server=$Server; TriggerTimestamp=$TriggerTime.ToString('s');
+                TriggerProcessName=$TriggerProcess; TriggerProcessCpuServerPercent=$TriggerCpu; TriggerThreshold=$TriggerThreshold; TriggerReason='MsMpEng ProcessCpuServerPercent >= DefenderPerfTriggerServerCpuPercent';
+                Status=$remote.Status; StartTime=$jobStartTime.ToString('s'); EndTime=$jobEndTime.ToString('s'); DurationSeconds=[Math]::Round(($jobEndTime - $jobStartTime).TotalSeconds, 1);
                 EtlLocalPath=$remote.EtlLocalPath; LogLocalPath=$remote.LogLocalPath; ReportTxtLocalPath=$remote.ReportTxtLocalPath; ReportJsonLocalPath=$remote.ReportJsonLocalPath;
                 EtlCentralPath=$centralPaths['Etl']; LogCentralPath=$centralPaths['Log']; ReportTxtCentralPath=$centralPaths['ReportTxt']; ReportJsonCentralPath=$centralPaths['ReportJson'];
-                EtlPath=$etlResultPath; LogPath=$logResultPath; ReportPath=$reportResultPath; RawJsonPath=$rawJsonResultPath;
-                RemoteFolder=$remote.RemoteFolder; CentralFolder=$centralFolder; ReportGenerationStatus=$remote.ReportGenerationStatus; CopyStatus=$copyStatus; Status=$remote.Status; ErrorMessage=$remote.ErrorMessage
+                ReportGenerationStatus=$remote.ReportGenerationStatus; CopyStatus=$copyStatus; ErrorMessage=$remote.ErrorMessage
             }
         }
         catch {
-            [pscustomobject]@{ RunId=$RunId; Server=$Server; TriggerTimestamp=$TriggerTime.ToString('s'); TriggerTime=$TriggerTime.ToString('s'); TriggerProcessName=$TriggerProcess; TriggerProcess=$TriggerProcess; TriggerProcessCpuServerPercent=$TriggerCpu; TriggerCpu=$TriggerCpu; TriggerThreshold=$TriggerThreshold; TriggerReason='MsMpEng ProcessCpuServerPercent >= DefenderPerfTriggerServerCpuPercent'; EtlLocalPath=''; LogLocalPath=''; ReportTxtLocalPath=''; ReportJsonLocalPath=''; EtlCentralPath=''; LogCentralPath=''; ReportTxtCentralPath=''; ReportJsonCentralPath=''; EtlPath=''; LogPath=''; ReportPath=''; RawJsonPath=''; RemoteFolder=''; CentralFolder=$centralFolder; ReportGenerationStatus='Failed'; CopyStatus='NotStarted'; Status='Failed'; ErrorMessage=$_.Exception.Message }
+            $jobEndTime = Get-Date
+            [pscustomobject][ordered]@{ RunId=$RunId; Server=$Server; TriggerTimestamp=$TriggerTime.ToString('s'); TriggerProcessName=$TriggerProcess; TriggerProcessCpuServerPercent=$TriggerCpu; TriggerThreshold=$TriggerThreshold; TriggerReason='MsMpEng ProcessCpuServerPercent >= DefenderPerfTriggerServerCpuPercent'; Status='Failed'; StartTime=$jobStartTime.ToString('s'); EndTime=$jobEndTime.ToString('s'); DurationSeconds=[Math]::Round(($jobEndTime - $jobStartTime).TotalSeconds, 1); EtlLocalPath=''; LogLocalPath=''; ReportTxtLocalPath=''; ReportJsonLocalPath=''; EtlCentralPath=''; LogCentralPath=''; ReportTxtCentralPath=''; ReportJsonCentralPath=''; ReportGenerationStatus='Failed'; CopyStatus='NotStarted'; ErrorMessage=$_.Exception.Message }
         }
         finally {
             if ($session) { Remove-PSSession -Session $session -ErrorAction SilentlyContinue }
@@ -986,8 +1030,7 @@ function Receive-DetailDiagnosticJobs {
     foreach ($job in @($DefenderJobs | Where-Object { $_.State -ne 'Running' })) {
         try {
             $rows = @(Receive-Job -Job $job -ErrorAction SilentlyContinue)
-            Export-Rows -Rows $rows -Path (Join-Path $RawPath "DefenderPerfRecordings_$RunId.csv") -Delimiter $Delimiter
-            Export-Rows -Rows $rows -Path (Join-Path $RunOutputPath 'DefenderPerfRecordings.csv') -Delimiter $Delimiter
+            Export-DefenderPerfRecordingRows -Rows $rows -RawPath $RawPath -RunOutputPath $RunOutputPath -RunId $RunId -Delimiter $Delimiter -RunLogFile $RunLogFile
         } finally { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue }
     }
     foreach ($job in @($WemJobs | Where-Object { $_.State -ne 'Running' })) {
@@ -1039,9 +1082,8 @@ function Complete-DetailDiagnosticJobs {
         $triggerCpu = if ($job.PSObject.Properties.Name -contains 'TriggerCpu') { $job.TriggerCpu } else { '' }
         $centralFolder = if ($server) { Join-Path (Join-Path (Join-Path $OutputPath 'DefenderPerf') $RunId) ($server -replace '[^A-Za-z0-9_.-]', '_') } else { '' }
         $triggerThreshold = if ($job.PSObject.Properties.Name -contains 'TriggerThreshold') { $job.TriggerThreshold } else { '' }
-        $timeoutRow = [pscustomobject]@{ RunId=$RunId; Server=$server; TriggerTimestamp=$triggerTime; TriggerTime=$triggerTime; TriggerProcessName=$triggerProcess; TriggerProcess=$triggerProcess; TriggerProcessCpuServerPercent=$triggerCpu; TriggerCpu=$triggerCpu; TriggerThreshold=$triggerThreshold; TriggerReason='MsMpEng ProcessCpuServerPercent >= DefenderPerfTriggerServerCpuPercent'; EtlLocalPath=''; LogLocalPath=''; ReportTxtLocalPath=''; ReportJsonLocalPath=''; EtlCentralPath=''; LogCentralPath=''; ReportTxtCentralPath=''; ReportJsonCentralPath=''; EtlPath=''; LogPath=''; ReportPath=''; RawJsonPath=''; RemoteFolder=''; CentralFolder=$centralFolder; ReportGenerationStatus='TimedOut'; CopyStatus='NotStarted'; Status='TimedOut'; ErrorMessage='Defender Performance Recording lief nach Ende des Hauptlaufs noch und wurde nicht weiter abgewartet.' }
-        Export-Rows -Rows @($timeoutRow) -Path (Join-Path $RawPath "DefenderPerfRecordings_$RunId.csv") -Delimiter $Delimiter
-        Export-Rows -Rows @($timeoutRow) -Path (Join-Path $RunOutputPath 'DefenderPerfRecordings.csv') -Delimiter $Delimiter
+        $timeoutRow = New-DefenderPerfRecordingRow -Values @{ RunId=$RunId; Server=$server; TriggerTimestamp=$triggerTime; TriggerProcessName=$triggerProcess; TriggerProcessCpuServerPercent=$triggerCpu; TriggerThreshold=$triggerThreshold; TriggerReason='MsMpEng ProcessCpuServerPercent >= DefenderPerfTriggerServerCpuPercent'; Status='TimedOut'; StartTime=$triggerTime; EndTime=(Get-Date).ToString('s'); DurationSeconds=''; ReportGenerationStatus='TimedOut'; CopyStatus='NotStarted'; ErrorMessage='Defender Performance Recording lief nach Ende des Hauptlaufs noch und wurde nicht weiter abgewartet.' }
+        Export-DefenderPerfRecordingRows -Rows @($timeoutRow) -RawPath $RawPath -RunOutputPath $RunOutputPath -RunId $RunId -Delimiter $Delimiter -RunLogFile $RunLogFile
         Write-RunLog -Path $RunLogFile -Level 'WARN' -Message "Defender Performance Recording timed out: $server"
         Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
     }
@@ -1102,6 +1144,7 @@ $defenderTriggered = $false
 $wemTriggered = $false
 $round = 0
 $completedRounds = 0
+$measurementStartTime = $runStart
 $plannedDurationMinutes = [int]$settings.DurationMinutes
 $intervalSeconds = [Math]::Max(1, [int]$settings.IntervalSeconds)
 $hardEndTime = $runStart.AddMinutes($plannedDurationMinutes)
@@ -1110,7 +1153,6 @@ $endReason = 'Completed'
 $runError = $null
 
 try {
-    Write-EffectiveConfiguration -Settings $settings -RunLogFile $runLogFile -HardEndTime $hardEndTime -MaxRounds $maxRounds
     Write-RunLog -Path $runLogFile -Message "Run gestartet. Server=$($servers.Count), DurationMinutes=$($settings.DurationMinutes), IntervalSeconds=$($settings.IntervalSeconds), MaxParallel=$($settings.MaxParallel), StartTime=$($runStart.ToString('s')), HardEndTime=$($hardEndTime.ToString('s')), MaxRounds=$maxRounds, DefenderPerfLocalRoot=$($settings.DefenderPerfLocalRoot), DefenderPerfTriggerServerCpuPercent=$($settings.DefenderPerfTriggerServerCpuPercent), DefenderPerfRecordingSeconds=$($settings.DefenderPerfRecordingSeconds), DefenderPerfCooldownMinutes=$($settings.DefenderPerfCooldownMinutes), MaxConcurrentDefenderPerfRecordings=$($settings.MaxConcurrentDefenderPerfRecordings), DefenderPerfFinalWaitSeconds=$($settings.DefenderPerfFinalWaitSeconds), FinalizationTimeoutSeconds=$($settings.FinalizationTimeoutSeconds), WemTriggerServerCpuPercent=$($settings.WemTriggerServerCpuPercent), WemEventWindowMinutes=$($settings.WemEventWindowMinutes)"
     if ($settings.IncludeScheduledTaskInventory) {
         Write-RunLog -Path $runLogFile -Message 'ScheduledTaskInventory gestartet.'
@@ -1129,12 +1171,24 @@ try {
         Export-Rows -Rows $duplicateRows -Path (Join-Path $runOutputPath 'CylanceHealth_Duplicates.csv') -Delimiter $settings.OutputDelimiter
         Write-RunLog -Path $runLogFile -Message "CylanceHealth beendet. Zeilen=$($cylanceRows.Count), Duplikate=$($duplicateRows.Count)"
     }
+    $measurementStartTime = Get-Date
+    $hardEndTime = $measurementStartTime.AddMinutes($plannedDurationMinutes)
+    Write-RunLog -Path $runLogFile -Message "MeasurementStartTime=$($measurementStartTime.ToString('s')), HardEndTime=$($hardEndTime.ToString('s')), MaxRounds=$maxRounds"
+    Write-EffectiveConfiguration -Settings $settings -RunLogFile $runLogFile -HardEndTime $hardEndTime -MaxRounds $maxRounds
     while ($true) {
-        if (($round + 1) -gt $maxRounds) { $endReason = 'MaxRoundsReached'; Write-RunLog -Path $runLogFile -Message "Keine neue Runde: MaxRounds erreicht ($maxRounds)."; break }
+        $nextRound = $round + 1
+        if ($nextRound -gt $maxRounds) { $endReason = 'MaxRoundsReached'; Write-RunLog -Path $runLogFile -Message "Keine neue Runde: MaxRounds erreicht ($maxRounds)."; break }
+        $plannedRoundStart = $measurementStartTime.AddSeconds(($nextRound - 1) * $intervalSeconds)
+        if ($plannedRoundStart -ge $hardEndTime) { $endReason = 'HardEndTimeReached'; Write-RunLog -Path $runLogFile -Message "Keine neue Runde: geplanter Start $($plannedRoundStart.ToString('s')) liegt an/nach HardEndTime $($hardEndTime.ToString('s'))."; break }
+        $now = Get-Date
+        if ($now -lt $plannedRoundStart) {
+            $sleepSeconds = [int][Math]::Ceiling(($plannedRoundStart - $now).TotalSeconds)
+            if ($sleepSeconds -gt 0) { Start-Sleep -Seconds ([Math]::Min($sleepSeconds, [Math]::Max(0, [int][Math]::Floor(($hardEndTime - $now).TotalSeconds)))) }
+        }
         if ((Get-Date) -ge $hardEndTime) { $endReason = 'HardEndTimeReached'; Write-RunLog -Path $runLogFile -Message "Keine neue Runde: HardEndTime erreicht ($($hardEndTime.ToString('s')))."; break }
-        $round++
+        $round = $nextRound
         $roundStart = Get-Date
-        $message = "Runde $round gestartet. Server=$($servers.Count), CpuSampleSeconds=$($settings.CpuSampleSeconds), Parallel=$($settings.MaxParallel)"
+        $message = "Runde $round gestartet. Geplant=$($plannedRoundStart.ToString('s')), Server=$($servers.Count), CpuSampleSeconds=$($settings.CpuSampleSeconds), Parallel=$($settings.MaxParallel)"
         Write-Host ("[{0}] {1}" -f $roundStart.ToString('HH:mm:ss'), $message)
         Write-RunLog -Path $runLogFile -Message $message
         $roundResults = @(Invoke-ServerCollectionRound -Servers $servers -Settings $settings -RoundTimestamp $roundStart)
@@ -1161,15 +1215,23 @@ try {
             $sampleTime = [datetime]$serverSample.Timestamp
             $msMpEng = @($item.Result.ProcessSamples | Where-Object { $_.ProcessName -eq 'MsMpEng' } | Sort-Object ProcessCpuServerPercent -Descending | Select-Object -First 1)
             if ($settings.AutoDefenderPerfRecording -and $msMpEng -and [double]$msMpEng.ProcessCpuServerPercent -ge [double]$settings.DefenderPerfTriggerServerCpuPercent) {
-                $runningDefenderJobs = @($defenderJobs | Where-Object { $_.State -eq 'Running' }).Count
-                $cooldownOk = (-not $defenderLastTriggerByServer.ContainsKey($item.TargetServer)) -or (($sampleTime - $defenderLastTriggerByServer[$item.TargetServer]).TotalMinutes -ge [int]$settings.DefenderPerfCooldownMinutes)
-                if (-not $defenderTriggeredServers.ContainsKey($item.TargetServer) -and $cooldownOk -and $runningDefenderJobs -lt [int]$settings.MaxConcurrentDefenderPerfRecordings) {
-                    $defenderLastTriggerByServer[$item.TargetServer] = $sampleTime
-                    $defenderTriggeredServers[$item.TargetServer] = $true
-                    $defenderTriggered = $true
-                    $defenderJobs += Start-DefenderPerfRecordingJob -Server $item.TargetServer -RunId $runId -OutputPath $OutputPath -LocalRoot $settings.DefenderPerfLocalRoot -CopyToOutputPath ([bool]$settings.DefenderPerfCopyToOutputPath) -Seconds ([int]$settings.DefenderPerfRecordingSeconds) -TriggerProcess 'MsMpEng' -TriggerCpu ([double]$msMpEng.ProcessCpuServerPercent) -TriggerThreshold ([double]$settings.DefenderPerfTriggerServerCpuPercent) -TriggerTime $sampleTime
-                    Export-Rows -Rows @([pscustomobject]@{ RunId=$runId; Server=$item.TargetServer; TriggerTimestamp=$sampleTime.ToString('s'); TriggerTime=$sampleTime.ToString('s'); TriggerProcessName='MsMpEng'; TriggerProcess='MsMpEng'; TriggerProcessCpuServerPercent=[double]$msMpEng.ProcessCpuServerPercent; TriggerCpu=[double]$msMpEng.ProcessCpuServerPercent; TriggerThreshold=[double]$settings.DefenderPerfTriggerServerCpuPercent; TriggerReason='MsMpEng ProcessCpuServerPercent >= DefenderPerfTriggerServerCpuPercent'; EtlLocalPath=''; LogLocalPath=''; ReportTxtLocalPath=''; ReportJsonLocalPath=''; EtlCentralPath=''; LogCentralPath=''; ReportTxtCentralPath=''; ReportJsonCentralPath=''; EtlPath=''; LogPath=''; ReportPath=''; RawJsonPath=''; RemoteFolder=''; CentralFolder=(Join-Path (Join-Path (Join-Path $OutputPath 'DefenderPerf') $runId) ($item.TargetServer -replace '[^A-Za-z0-9_.-]', '_')); ReportGenerationStatus='Pending'; CopyStatus='Pending'; Status='Running'; ErrorMessage='' }) -Path (Join-Path $rawPath "DefenderPerfRecordings_$runId.csv") -Delimiter $settings.OutputDelimiter
-                    Write-RunLog -Path $runLogFile -Message "Defender Performance Recording getriggert: $($item.TargetServer), MsMpEng=$($msMpEng.ProcessCpuServerPercent)%"
+                $remainingForDefenderSeconds = ($hardEndTime - (Get-Date)).TotalSeconds
+                $requiredDefenderSeconds = [int]$settings.DefenderPerfRecordingSeconds + 60
+                if ((Get-Date) -ge $hardEndTime -or $remainingForDefenderSeconds -lt $requiredDefenderSeconds) {
+                    Write-RunLog -Path $runLogFile -Level 'WARN' -Message "Defender Recording skipped: insufficient remaining time. Server=$($item.TargetServer), RemainingSeconds=$([Math]::Round($remainingForDefenderSeconds,1)), RequiredSeconds=$requiredDefenderSeconds"
+                }
+                else {
+                    $runningDefenderJobs = @($defenderJobs | Where-Object { $_.State -eq 'Running' }).Count
+                    $cooldownOk = (-not $defenderLastTriggerByServer.ContainsKey($item.TargetServer)) -or (($sampleTime - $defenderLastTriggerByServer[$item.TargetServer]).TotalMinutes -ge [int]$settings.DefenderPerfCooldownMinutes)
+                    if (-not $defenderTriggeredServers.ContainsKey($item.TargetServer) -and $cooldownOk -and $runningDefenderJobs -lt [int]$settings.MaxConcurrentDefenderPerfRecordings) {
+                        $defenderLastTriggerByServer[$item.TargetServer] = $sampleTime
+                        $defenderTriggeredServers[$item.TargetServer] = $true
+                        $defenderTriggered = $true
+                        $defenderJobs += Start-DefenderPerfRecordingJob -Server $item.TargetServer -RunId $runId -OutputPath $OutputPath -LocalRoot $settings.DefenderPerfLocalRoot -CopyToOutputPath ([bool]$settings.DefenderPerfCopyToOutputPath) -Seconds ([int]$settings.DefenderPerfRecordingSeconds) -TriggerProcess 'MsMpEng' -TriggerCpu ([double]$msMpEng.ProcessCpuServerPercent) -TriggerThreshold ([double]$settings.DefenderPerfTriggerServerCpuPercent) -TriggerTime $sampleTime
+                        $pendingRow = New-DefenderPerfRecordingRow -Values @{ RunId=$runId; Server=$item.TargetServer; TriggerTimestamp=$sampleTime.ToString('s'); TriggerProcessName='MsMpEng'; TriggerProcessCpuServerPercent=[double]$msMpEng.ProcessCpuServerPercent; TriggerThreshold=[double]$settings.DefenderPerfTriggerServerCpuPercent; TriggerReason='MsMpEng ProcessCpuServerPercent >= DefenderPerfTriggerServerCpuPercent'; Status='Pending'; StartTime=(Get-Date).ToString('s'); ReportGenerationStatus='Pending'; CopyStatus='Pending'; ErrorMessage='' }
+                        Export-DefenderPerfRecordingRows -Rows @($pendingRow) -RawPath $rawPath -RunOutputPath $runOutputPath -RunId $runId -Delimiter $settings.OutputDelimiter -RunLogFile $runLogFile
+                        Write-RunLog -Path $runLogFile -Message "Defender Performance Recording getriggert: $($item.TargetServer), MsMpEng=$($msMpEng.ProcessCpuServerPercent)%"
+                    }
                 }
             }
             $wemCpu = [double]$cat.WemCpuServerPercent
@@ -1234,8 +1296,6 @@ try {
         Write-RunLog -Path $runLogFile -Message $doneMessage
         if ($round -ge $maxRounds) { $endReason = 'MaxRoundsReached'; Write-RunLog -Path $runLogFile -Message "MaxRounds erreicht: $completedRounds/$maxRounds."; break }
         if ((Get-Date) -ge $hardEndTime) { $endReason = 'HardEndTimeReached'; Write-RunLog -Path $runLogFile -Message "HardEndTime erreicht: $($hardEndTime.ToString('s'))."; break }
-        $remaining = [int][Math]::Floor(($hardEndTime - (Get-Date)).TotalSeconds)
-        if ($remaining -gt 0) { Start-Sleep -Seconds ([Math]::Min($intervalSeconds, $remaining)) }
     }
 }
 catch {

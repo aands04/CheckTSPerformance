@@ -313,9 +313,9 @@ Der Button **HealthCheck stoppen** beendet den aktuell gestarteten PowerShell-Pr
 
 ### Laufzeitgrenze und Finalisierung
 
-Der Collector berechnet beim Start eine harte Endzeit (`StartTime + DurationMinutes`) und die geplante Rundenzahl (`Ceiling(DurationMinutes * 60 / IntervalSeconds)`). Vor und nach jeder Runde wird geprueft, ob `HardEndTime` oder `MaxRounds` erreicht sind; danach wird keine weitere Runde gestartet. `RunSummary_<RunId>.csv` enthaelt `EndReason`, `PlannedDurationMinutes`, `ActualDurationMinutes`, `PlannedRounds` und `CompletedRounds`.
+Der Collector berechnet nach optionalem Scheduled-Task-Inventory und CylanceHealth den `MeasurementStartTime`. Die harte Endzeit ist `MeasurementStartTime + DurationMinutes`; die geplante Rundenzahl bleibt `Ceiling(DurationMinutes * 60 / IntervalSeconds)`. Rundenstarts werden absolut geplant (`MeasurementStartTime`, `MeasurementStartTime + IntervalSeconds`, ...). Wenn eine Runde laenger dauert, startet die naechste faellige Runde sofort ohne zusaetzliche Pause; nach `HardEndTime` oder `MaxRounds` wird keine neue Runde gestartet. `RunSummary_<RunId>.csv` enthaelt `EndReason`, `PlannedDurationMinutes`, `ActualDurationMinutes`, `PlannedRounds` und `CompletedRounds`.
 
-Defender Performance Recordings laufen als Background-Jobs. Am Ende wartet der Hauptlauf nur bis `DefenderPerfFinalWaitSeconds` (Default 120) beziehungsweise insgesamt maximal `FinalizationTimeoutSeconds` (Default 300) auf Detaildiagnosen; offene Defender-Jobs werden als `TimedOut` in `DefenderPerfRecordings_<RunId>.csv` protokolliert.
+Defender Performance Recordings laufen als Background-Jobs. Neue Recordings werden nicht mehr gestartet, wenn die `HardEndTime` erreicht ist oder weniger als `DefenderPerfRecordingSeconds + 60` Sekunden Restzeit verfuegbar sind; das RunLog meldet dann `Defender Recording skipped: insufficient remaining time`. Am Ende wartet der Hauptlauf nur bis `DefenderPerfFinalWaitSeconds` (Default 120) beziehungsweise insgesamt maximal `FinalizationTimeoutSeconds` (Default 300) auf Detaildiagnosen; offene Defender-Jobs werden als `TimedOut` in `DefenderPerfRecordings_<RunId>.csv` protokolliert.
 
 
 ### Defender Trigger- und Reportdetails
