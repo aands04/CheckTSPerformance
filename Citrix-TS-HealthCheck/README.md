@@ -312,3 +312,10 @@ Der Button **HealthCheck stoppen** beendet den aktuell gestarteten PowerShell-Pr
 Der Collector berechnet beim Start eine harte Endzeit (`StartTime + DurationMinutes`) und die geplante Rundenzahl (`Ceiling(DurationMinutes * 60 / IntervalSeconds)`). Vor und nach jeder Runde wird geprueft, ob `HardEndTime` oder `MaxRounds` erreicht sind; danach wird keine weitere Runde gestartet. `RunSummary_<RunId>.csv` enthaelt `EndReason`, `PlannedDurationMinutes`, `ActualDurationMinutes`, `PlannedRounds` und `CompletedRounds`.
 
 Defender Performance Recordings laufen als Background-Jobs. Am Ende wartet der Hauptlauf nur bis `DefenderPerfFinalWaitSeconds` (Default 120) beziehungsweise insgesamt maximal `FinalizationTimeoutSeconds` (Default 300) auf Detaildiagnosen; offene Defender-Jobs werden als `TimedOut` in `DefenderPerfRecordings_<RunId>.csv` protokolliert.
+
+
+### Defender Trigger- und Reportdetails
+
+`AutoDefenderPerfRecording` startet ausschliesslich bei `MsMpEng.exe`, wenn `ProcessCpuServerPercent` im aktuellen Sample groesser oder gleich `DefenderPerfTriggerServerCpuPercent` ist. `MsSense.exe`, `SenseNdr.exe`, `CylanceSvc.exe` und die Security-Gesamtkategorie loesen kein Defender Recording aus.
+
+Defender-Dateien werden auf dem Zielserver unter `DefenderPerfLocalRoot\<RunId>\<Server>\` abgelegt und optional nach `<OutputPath>\DefenderPerf\<RunId>\<Server>\` kopiert. `DefenderPerfRecordings_<RunId>.csv` enthaelt Triggerprozess, Trigger-CPU, Schwellwert, lokale und zentrale Pfade sowie Report-/Copy-Status.

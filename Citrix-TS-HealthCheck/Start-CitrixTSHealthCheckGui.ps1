@@ -90,6 +90,8 @@ function Read-SettingsFile {
             MaxConcurrentDefenderPerfRecordings = 2
             DefenderPerfFinalWaitSeconds = 120
             FinalizationTimeoutSeconds = 300
+            DefenderPerfLocalRoot = 'C:\ProgramData\CitrixTSHealthCheck\DefenderPerf'
+            DefenderPerfCopyToOutputPath = $true
             IncludeWemEventContext = $false
             WemTriggerServerCpuPercent = 10
             WemEventWindowMinutes = 10
@@ -168,6 +170,8 @@ function Save-SettingsFile {
     $taskNames = if ($TaskNamesToCheck -and $TaskNamesToCheck.Count -gt 0) { @($TaskNamesToCheck) } elseif ($existingTaskNames -and $existingTaskNames.Count -gt 0) { @($existingTaskNames) } else { $defaultTaskNames }
     $defenderPerfFinalWaitSeconds = [int](Get-SettingValue -Settings $existing -Name 'DefenderPerfFinalWaitSeconds' -DefaultValue 120)
     $finalizationTimeoutSeconds = [int](Get-SettingValue -Settings $existing -Name 'FinalizationTimeoutSeconds' -DefaultValue 300)
+    $defenderPerfLocalRoot = [string](Get-SettingValue -Settings $existing -Name 'DefenderPerfLocalRoot' -DefaultValue 'C:\ProgramData\CitrixTSHealthCheck\DefenderPerf')
+    $defenderPerfCopyToOutputPath = [bool](Get-SettingValue -Settings $existing -Name 'DefenderPerfCopyToOutputPath' -DefaultValue $true)
     $settings = [ordered]@{
         DurationMinutes = $DurationMinutes
         IntervalSeconds = $IntervalSeconds
@@ -185,6 +189,8 @@ function Save-SettingsFile {
         MaxConcurrentDefenderPerfRecordings = $MaxConcurrentDefenderPerfRecordings
         DefenderPerfFinalWaitSeconds = $defenderPerfFinalWaitSeconds
         FinalizationTimeoutSeconds = $finalizationTimeoutSeconds
+        DefenderPerfLocalRoot = $defenderPerfLocalRoot
+        DefenderPerfCopyToOutputPath = $defenderPerfCopyToOutputPath
         IncludeWemEventContext = $IncludeWemEventContext
         WemTriggerServerCpuPercent = $WemTriggerServerCpuPercent
         WemEventWindowMinutes = $WemEventWindowMinutes
