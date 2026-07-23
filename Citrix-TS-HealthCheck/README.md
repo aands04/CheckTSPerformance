@@ -332,7 +332,7 @@ Mit `-IncludeWemCpuSpikeProtectionEvents` erfasst der Collector waehrend der Mes
 
 Bei aktivierter Option entstehen pro Lauf zusaetzlich `WemCpuSpikeProtectionEvents_<RunId>.csv` im Raw-Ordner und `output\runs\<RunId>\WemCpuSpikeProtectionEvents.csv` im Run-Ordner. Die Datei wird auch ohne Treffer mit Kopfzeile erstellt. Die zugehoerige `WemCpuSpikeProtectionSummary_<RunId>.csv` fasst Trigger, Prioritaetswechsel und korrelierte Prozesssamples zusammen. `WemPriorityLoweringSeconds` (Default 180) beschreibt die konfigurierte Schutzdauer fuer die Korrelation: Prozesssamples innerhalb dieses Zeitfensters nach einem passenden WEM-Prioritaetsereignis werden mit `WemProtectionLikelyActive` markiert.
 
-Die Event-XML-Felder koennen je nach WEM-Version unterschiedlich heissen. Das Script liest bekannte Feldvarianten bestmoeglich dynamisch aus; wenn ein Feld fehlt, bleibt es leer. Die vollstaendige Eventnachricht und das Raw-XML werden gespeichert, damit unvollstaendige oder versionsabhaengige Events spaeter manuell ausgewertet werden koennen.
+Die Event-XML-Felder koennen je nach WEM-Version unterschiedlich heissen. Das Script liest bekannte Feldvarianten bestmoeglich dynamisch aus; wenn ein Feld fehlt, bleibt es leer. Die vollstaendige Eventnachricht und das Raw-XML werden gespeichert, damit unvollstaendige oder versionsabhaengige Events spaeter manuell ausgewertet werden koennen. Zusaetzlich schreibt `WemCpuSpikeProtectionQueryDiagnostics_<RunId>.csv`, welche WEM-Kandidatenlogs pro Server gefunden, ausgewaehlt und erfolgreich abgefragt wurden; nicht vorhandene Alternativlogs zaehlen dabei nicht als QueryError.
 
 Beispiel fuer einen geplanten Task/CLI-Aufruf mit aktiver WEM-CPU-Spike-Erfassung:
 
