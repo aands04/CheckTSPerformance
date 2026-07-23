@@ -1030,9 +1030,32 @@ function Get-SumValue {
     return $sum
 }
 
+function ConvertTo-NullableDouble {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [double] -or $Value -is [single] -or $Value -is [decimal] -or $Value -is [int] -or $Value -is [long]) { return [double]$Value }
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    try { return [double]::Parse($text, [Globalization.CultureInfo]::InvariantCulture) } catch { }
+    try { return [double]::Parse($text, [Globalization.CultureInfo]::CurrentCulture) } catch { }
+    return $null
+}
+
+function Get-NumericValues {
+    param([array]$Rows, [string]$PropertyName, [switch]$Sort)
+    $values = @()
+    foreach ($row in @($Rows)) {
+        if ($null -eq $row -or -not ($row.PSObject.Properties.Name -contains $PropertyName)) { continue }
+        $number = ConvertTo-NullableDouble -Value $row.$PropertyName
+        if ($null -ne $number) { $values += $number }
+    }
+    if ($Sort) { return @($values | Sort-Object) }
+    return @($values)
+}
+
 function Get-PercentileValue {
     param([double[]]$Values, [double]$Percentile)
-    if (-not $Values -or $Values.Count -eq 0) { return '' }
+    if (-not $Values -or $Values.Count -eq 0) { return $null }
     $sorted = @($Values | Sort-Object)
     $index = [Math]::Ceiling(($Percentile / 100) * $sorted.Count) - 1
     $index = [Math]::Max(0, [Math]::Min($index, $sorted.Count - 1))
@@ -1054,9 +1077,9 @@ function New-CategoryAggregateRows {
         if ($rows.Count -eq 0) { continue }
         $server = $rows[0].TargetServer
         $category = $rows[0].Category
-        $coreValues = @($rows | ForEach-Object { [double]$_.ProcessCpuCorePercent })
-        $serverValues = @($rows | ForEach-Object { [double]$_.ProcessCpuServerPercent })
-        $wsValues = @($rows | Where-Object { $_.ProcessWorkingSetMB -ne '' } | ForEach-Object { [double]$_.ProcessWorkingSetMB })
+        $coreValues = @(Get-NumericValues -Rows $rows -PropertyName 'ProcessCpuCorePercent')
+        $serverValues = @(Get-NumericValues -Rows $rows -PropertyName 'ProcessCpuServerPercent')
+        $wsValues = @(Get-NumericValues -Rows $rows -PropertyName 'ProcessWorkingSetMB')
         [pscustomobject]@{
             RunId = $RunId
             Server = $server
@@ -1082,10 +1105,10 @@ function New-RunSummaryRows {
     foreach ($group in ($ServerRows | Group-Object TargetServer)) {
         $server = $group.Name
         $okRows = @($group.Group | Where-Object Status -eq 'OK')
-        $cpuValues = @($okRows | Where-Object { $_.CpuPercent -ne '' } | ForEach-Object { [double]$_.CpuPercent } | Sort-Object)
-        $ramValues = @($okRows | Where-Object { $_.MemoryPercent -ne '' } | ForEach-Object { [double]$_.MemoryPercent })
-        $activeValues = @($okRows | Where-Object { $_.ActiveSessions -ne '' } | ForEach-Object { [double]$_.ActiveSessions })
-        $discValues = @($okRows | Where-Object { $_.DisconnectedSessions -ne '' } | ForEach-Object { [double]$_.DisconnectedSessions })
+        $cpuValues = @(Get-NumericValues -Rows $okRows -PropertyName 'CpuPercent' -Sort)
+        $ramValues = @(Get-NumericValues -Rows $okRows -PropertyName 'MemoryPercent')
+        $activeValues = @(Get-NumericValues -Rows $okRows -PropertyName 'ActiveSessions')
+        $discValues = @(Get-NumericValues -Rows $okRows -PropertyName 'DisconnectedSessions')
         $median = Get-PercentileValue -Values $cpuValues -Percentile 50
         $p95 = Get-PercentileValue -Values $cpuValues -Percentile 95
         $serverProcessRows = @($ProcessRows | Where-Object TargetServer -eq $server)
@@ -1097,7 +1120,7 @@ function New-RunSummaryRows {
         [pscustomobject]@{
             RunId = $runId; StartTime = $Start.ToString('s'); EndTime = $End.ToString('s'); EndReason = $EndReason; PlannedDurationMinutes = $PlannedDurationMinutes; ActualDurationMinutes = $ActualDurationMinutes; PlannedRounds = $PlannedRounds; CompletedRounds = $CompletedRounds; IntervalSeconds = $settings.IntervalSeconds; CpuSampleSeconds = $settings.CpuSampleSeconds; ServerList = ($servers -join ','); ImageVersion = $settings.ImageVersion; Notes = $settings.Notes; ScriptVersion = '1.0.0'; OutputPath = $OutputPath; RunStart = $Start.ToString('s'); RunEnd = $End.ToString('s'); DurationMinutes = [Math]::Round(($End-$Start).TotalMinutes, 2); ServerCount = $ServerCount; TargetServer = $server;
             SampleCount = $okRows.Count; ErrorCount = @($group.Group | Where-Object Status -eq 'ERROR').Count;
-            CpuAverage = if ($cpuValues.Count) { [Math]::Round((($cpuValues | Measure-Object -Average).Average),2) } else { '' }; CpuMedian = if ($median -ne '') { [Math]::Round($median,2) } else { '' }; CpuMax = if ($cpuValues.Count) { [Math]::Round((($cpuValues | Measure-Object -Maximum).Maximum),2) } else { '' }; CpuP95 = if ($p95 -ne '') { [Math]::Round($p95,2) } else { '' };
+            CpuAverage = if ($cpuValues.Count) { [Math]::Round((($cpuValues | Measure-Object -Average).Average),2) } else { '' }; CpuMedian = if ($null -ne $median) { [Math]::Round($median,2) } else { '' }; CpuMax = if ($cpuValues.Count) { [Math]::Round((($cpuValues | Measure-Object -Maximum).Maximum),2) } else { '' }; CpuP95 = if ($null -ne $p95) { [Math]::Round($p95,2) } else { '' };
             CpuWarningCount = @($okRows | Where-Object { $_.IsCpuWarning -eq $true }).Count; CpuCriticalCount = @($okRows | Where-Object { $_.IsCpuCritical -eq $true }).Count;
             MemoryAverage = if ($ramValues.Count) { [Math]::Round((($ramValues | Measure-Object -Average).Average),2) } else { '' }; MemoryMax = if ($ramValues.Count) { [Math]::Round((($ramValues | Measure-Object -Maximum).Maximum),2) } else { '' };
             ActiveSessionsAverage = if ($activeValues.Count) { [Math]::Round((($activeValues | Measure-Object -Average).Average),2) } else { '' }; ActiveSessionsMax = if ($activeValues.Count) { [Math]::Round((($activeValues | Measure-Object -Maximum).Maximum),2) } else { '' };
@@ -1287,7 +1310,14 @@ function Invoke-WemCpuSpikeProtectionEventCollection {
                             }
                         }
                     } catch {
-                        $diagRows += [pscustomobject]@{ RunId=$RunId; Server=$env:COMPUTERNAME; CandidateLogName=$candidate; LogExists=$true; Selected=$selected; QuerySucceeded=$false; EventsReturned=0; ErrorType=$_.Exception.GetType().FullName; ErrorMessage=$_.Exception.Message }
+                        $errorId = [string]$_.FullyQualifiedErrorId
+                        $errorMessage = [string]$_.Exception.Message
+                        if ($errorId -like 'NoMatchingEventsFound,*' -or $errorMessage -like 'No events were found that match the specified selection criteria*') {
+                            $diagRows += [pscustomobject]@{ RunId=$RunId; Server=$env:COMPUTERNAME; CandidateLogName=$candidate; LogExists=$true; Selected=$selected; QuerySucceeded=$true; EventsReturned=0; ErrorType=''; ErrorMessage='' }
+                        }
+                        else {
+                            $diagRows += [pscustomobject]@{ RunId=$RunId; Server=$env:COMPUTERNAME; CandidateLogName=$candidate; LogExists=$true; Selected=$selected; QuerySucceeded=$false; EventsReturned=0; ErrorType=$_.Exception.GetType().FullName; ErrorMessage=$errorMessage }
+                        }
                     }
                 }
                 [pscustomobject]@{ Events=@($eventRows); Diagnostics=@($diagRows) }
