@@ -1,0 +1,1 @@
+Dieser Ordner ist fuer optionale Erweiterungen reserviert, z. B. ausgelagerte Hilfsfunktionen oder Testscripte. Die aktuelle Version enthaelt ein CLI-/Scheduled-Task-Script und eine Windows-Forms-GUI im Projektwurzelverzeichnis, damit beides ohne Modulinstallation direkt ausgefuehrt werden kann.
