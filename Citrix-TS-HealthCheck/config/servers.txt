@@ -1,0 +1,4 @@
+# Ein Servername oder FQDN pro Zeile
+# Kommentare mit # und Leerzeilen werden ignoriert
+TS-SERVER01
+TS-SERVER02.contoso.local
