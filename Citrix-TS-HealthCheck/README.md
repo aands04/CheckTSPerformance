@@ -327,4 +327,4 @@ Defender-Dateien werden auf dem Zielserver unter `DefenderPerfLocalRoot\<RunId>\
 
 ### Taskplanung in der GUI
 
-Beim Erstellen eines geplanten HealthChecks legt die GUI den Task im Task-Scheduler-Unterordner `TS Health Checks` an und haengt dem eingegebenen Basisnamen automatisch einen Zeitstempel im Format `yyyyMMdd_HHmmss` an. Nach erfolgreicher Registrierung erscheint eine Erfolgsmeldung mit vollstaendigem Taskpfad und Namen.
+Beim Erstellen eines geplanten HealthChecks legt die GUI den Task im Task-Scheduler-Unterordner `TS Health Checks` an und haengt dem eingegebenen Basisnamen automatisch einen Zeitstempel im Format `yyyyMMdd_HHmmss` an. Der Task wird mit `LogonType S4U` registriert, sodass im Task Scheduler **Run whether user is logged on or not** ausgewaehlt ist. Nach erfolgreicher Registrierung erscheint eine Erfolgsmeldung mit vollstaendigem Taskpfad, Namen und Anmeldeoption.

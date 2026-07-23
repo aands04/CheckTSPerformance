@@ -500,6 +500,8 @@ function Register-HealthCheckScheduledTask {
             "Created=$(Get-Date -Format s)",
             "TaskPath=$taskPath",
             "TaskName=$taskName",
+            "LogonType=S4U",
+            "RunWhetherUserIsLoggedOnOrNot=True",
             "StartTime=$($taskStartPicker.Value.ToString('s'))",
             "CommandLine=$taskCommandLine"
         ) | Set-Content -LiteralPath $taskCommandLinePath -Encoding UTF8
@@ -519,10 +521,10 @@ function Register-HealthCheckScheduledTask {
         $trigger = New-ScheduledTaskTrigger -Once -At $taskStartPicker.Value
     }
     $principalUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
-    $principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType Interactive -RunLevel Highest
+    $principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType S4U -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours ([int]$taskExecutionLimitHoursBox.Value))
     Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    $successMessage = "Scheduled Task eingerichtet: $taskPath$taskName"
+    $successMessage = "Scheduled Task eingerichtet: $taskPath$taskName`r`nAusfuehrung: unabhaengig von Benutzeranmeldung (Run whether user is logged on or not)"
     if ($taskCommandLinePath) { $successMessage = "$successMessage`r`nTaskCommandLine: $taskCommandLinePath" }
     Add-StatusLine $successMessage
     [System.Windows.Forms.MessageBox]::Show($successMessage, 'Task erfolgreich eingerichtet', 'OK', 'Information') | Out-Null
