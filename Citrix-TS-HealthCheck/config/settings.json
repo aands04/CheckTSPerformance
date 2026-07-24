@@ -47,5 +47,7 @@
   ],
   "OutputDelimiter": ";",
   "WinRMTimeoutSeconds": 5,
-  "IncludeDisconnectedSessions": true
+  "IncludeDisconnectedSessions": true,
+  "EventContextCooldownMinutes": 10,
+  "DefenderRecordingStartDelayWarningSeconds": 30
 }

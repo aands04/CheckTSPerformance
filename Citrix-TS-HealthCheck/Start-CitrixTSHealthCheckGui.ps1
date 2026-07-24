@@ -90,12 +90,14 @@ function Read-SettingsFile {
             MaxConcurrentDefenderPerfRecordings = 2
             DefenderPerfFinalWaitSeconds = 120
             FinalizationTimeoutSeconds = 300
+            DefenderRecordingStartDelayWarningSeconds = 30
             DefenderPerfLocalRoot = 'C:\ProgramData\CitrixTSHealthCheck\DefenderPerf'
             DefenderPerfCopyToOutputPath = $true
             IncludeWemEventContext = $false
             IncludeWemCpuSpikeProtectionEvents = $false
             WemPriorityLoweringSeconds = 180
             WemEventContextCooldownMinutes = 10
+            EventContextCooldownMinutes = 10
             WemTriggerServerCpuPercent = 10
             WemEventWindowMinutes = 10
             IncludeWemLogTail = $false
@@ -619,7 +621,14 @@ function Complete-HealthCheckRun {
     }
 
     $latestSummary = Get-LatestFile -Folder ([IO.Path]::Combine($outputPathBox.Text, 'summary')) -Filter 'RunSummary_*.csv'
-    if ($latestSummary) { Add-StatusLine "Letzte Zusammenfassung: $($latestSummary.FullName)" }
+    if ($latestSummary) {
+        Add-StatusLine "Letzte Zusammenfassung: $($latestSummary.FullName)"
+        try {
+            $summaryRows = @(Import-Csv -LiteralPath $latestSummary.FullName -Delimiter (Get-SettingValue -Settings (Read-SettingsFile) -Name 'OutputDelimiter' -DefaultValue ';') -ErrorAction Stop)
+            if ($summaryRows.Count -gt 0 -and $summaryRows[0].PSObject.Properties.Name -contains 'RunStatus') { Add-StatusLine "RunStatus: $($summaryRows[0].RunStatus)" }
+        }
+        catch { Add-StatusLine "RunStatus konnte nicht gelesen werden: $($_.Exception.Message)" }
+    }
     Add-StatusLine "Output: $($outputPathBox.Text)"
     Add-StatusLine "Logs: $([IO.Path]::Combine($outputPathBox.Text, 'logs'))"
     $script:HealthCheckProcess = $null

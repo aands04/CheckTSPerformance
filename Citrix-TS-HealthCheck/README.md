@@ -351,3 +351,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\Citrix-TS-He
 ### Taskplanung in der GUI
 
 Beim Erstellen eines geplanten HealthChecks legt die GUI den Task im Task-Scheduler-Unterordner `TS Health Checks` an und haengt dem eingegebenen Basisnamen automatisch einen Zeitstempel im Format `yyyyMMdd_HHmmss` an. Der Task wird mit `LogonType Password` registriert; die GUI fragt beim Erstellen nach dem Kennwort. Dadurch ist im Task Scheduler **Run whether user is logged on or not** ausgewaehlt und **Do not store password** bleibt deaktiviert. Nach erfolgreicher Registrierung erscheint eine Erfolgsmeldung mit vollstaendigem Taskpfad, Namen und Anmeldeoption.
+
+### WEM-Nachverarbeitung, HealthCheck-Eigenlast und Laufstatus
+
+Die WEM-CPU-Spike-Protection-Nachverarbeitung normalisiert Prozessnamen zentral (z. B. `WmiPrvSE.exe` -> `wmiprvse`) und wertet WEM-Events mehrstufig aus: benannte XML-Data-Felder, unbenannte XML-Data-Felder und bekannte Nachrichtenmuster. Die Spalten `ParseSucceeded`, `ParseMethod`, `ParseError`, `OriginalProcessName` und `NormalizedProcessName` helfen bei versionsabhaengigen WEM-Eventformaten; unbekannte Felder werden nicht erfunden, sondern leer gelassen, waehrend `Message` und `RawEventXml` erhalten bleiben.
+
+`Raw_ProcessSamples_<RunId>.csv` enthaelt zusaetzliche WEM-Korrelationsfelder (`WemEventId`, `WemEventRecordId`, `WemCorrelationMethod`, `WemCorrelationConfidence`). Eine Schutzwirkung gilt nur als wahrscheinlich, wenn ein passendes Ereignis zeitlich innerhalb von `WemPriorityLoweringSeconds` liegt und die Zuordnung mindestens ueber PID/Zeit oder PID/Startzeit belastbar ist.
+
+Monitoring-Prozesse wie `wsmprovhost`, `powershell`, `pwsh` und `WmiPrvSE` werden nur dann als `HealthCheck/WinRM` markiert, wenn CommandLine, Parent-Prozess, RunId oder Scriptpfad eine belastbare Zuordnung zum aktuellen HealthCheck liefern. Ohne diesen Nachweis bleibt `WmiPrvSE` als `Monitoring/WMI` auswertbar. Die RunSummary ergaenzt dafuer `CpuAverageIncludingHealthCheck`, `CpuAverageExcludingHealthCheck`, `HealthCheckCpuAverage`, `HealthCheckCpuMaximum`, `HealthCheckCpuP95` und `HealthCheckProcessSampleCount`.
+
+Der Laufstatus unterscheidet kuenftig Messung und Nachverarbeitung ueber `RunStatus`, `MeasurementStatus` und `PostProcessingStatus`. Empfohlene Exitcodes: `0` fuer vollstaendigen Erfolg, `2` fuer erfolgreiche Messung mit fehlerhafter Teil-Nachverarbeitung, `1` fuer fehlgeschlagene Hauptmessung. Die GUI zeigt den numerischen Exitcode und liest den RunStatus aus der neuesten RunSummary aus.
