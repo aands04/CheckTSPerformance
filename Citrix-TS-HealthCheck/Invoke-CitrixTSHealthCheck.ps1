@@ -368,7 +368,7 @@ function Get-CsvRowCount {
 }
 
 function New-OutputManifestRow {
-    param([string]$LogicalName, [bool]$Expected, [bool]$Enabled, [string]$Path, [string]$Delimiter)
+    param([string]$LogicalName, [bool]$Expected, [bool]$Enabled, [string]$Path, [string]$Delimiter, [Nullable[bool]]$WriteSucceededOverride = $null)
     $exists = $false; $size = 0; $rows = 0; $errorType = ''; $errorMessage = ''
     try {
         $exists = Test-Path -LiteralPath $Path
@@ -379,14 +379,16 @@ function New-OutputManifestRow {
         }
     }
     catch { $errorType = $_.Exception.GetType().FullName; $errorMessage = $_.Exception.Message }
+    $writeSucceeded = if ($null -ne $WriteSucceededOverride) { [bool]$WriteSucceededOverride } elseif (-not $Expected -and -not $Enabled) { $true } else { ($exists -and [string]::IsNullOrWhiteSpace($errorMessage)) }
     [pscustomobject]@{
-        LogicalName=$LogicalName; Expected=$Expected; Enabled=$Enabled; OutputPath=$Path; Created=$exists; ExistsAfterWrite=$exists; RowCount=$rows; FileSizeBytes=$size; WriteSucceeded=($exists -and [string]::IsNullOrWhiteSpace($errorMessage)); ErrorType=$errorType; ErrorMessage=$errorMessage
+        LogicalName=$LogicalName; Expected=$Expected; Enabled=$Enabled; OutputPath=$Path; Created=$exists; ExistsAfterWrite=$exists; RowCount=$rows; FileSizeBytes=$size; WriteSucceeded=$writeSucceeded; ErrorType=$errorType; ErrorMessage=$errorMessage
     }
 }
 
 
 function New-OutputFileManifestRows {
-    param($Settings, [string]$RunId, [string]$RawPath, [string]$SummaryPath, [string]$LogPath, [string]$RunOutputPath, [string]$Delimiter)
+    param($Settings, [string]$RunId, [string]$RawPath, [string]$SummaryPath, [string]$LogPath, [string]$RunOutputPath, [string]$Delimiter, [int]$DefenderRecordingsStarted = 0)
+    $defenderOutputsEnabled = ([bool]$Settings.AutoDefenderPerfRecording -and $DefenderRecordingsStarted -gt 0)
     $definitions = @(
         @{Name='RunLog';Enabled=$true;Path=(Join-Path $LogPath "RunLog_$RunId.log")},
         @{Name='ServerSamples';Enabled=$true;Path=(Join-Path $RawPath "ServerSamples_$RunId.csv")},
@@ -403,8 +405,8 @@ function New-OutputFileManifestRows {
         @{Name='WemCpuSpikeProtectionEvents';Enabled=([bool]$Settings.IncludeWemCpuSpikeProtectionEvents);Path=(Join-Path $RawPath "WemCpuSpikeProtectionEvents_$RunId.csv")},
         @{Name='WemCpuSpikeProtectionQueryDiagnostics';Enabled=([bool]$Settings.IncludeWemCpuSpikeProtectionEvents);Path=(Join-Path $RawPath "WemCpuSpikeProtectionQueryDiagnostics_$RunId.csv")},
         @{Name='WemCpuSpikeProtectionSummary';Enabled=([bool]$Settings.IncludeWemCpuSpikeProtectionEvents);Path=(Join-Path $RawPath "WemCpuSpikeProtectionSummary_$RunId.csv")},
-        @{Name='DefenderPerfRecordings';Enabled=([bool]$Settings.AutoDefenderPerfRecording);Path=(Join-Path $RawPath "DefenderPerfRecordings_$RunId.csv")},
-        @{Name='DefenderReports';Enabled=([bool]$Settings.AutoDefenderPerfRecording);Path=(Join-Path (Join-Path $RunOutputPath '..\..\DefenderPerf') $RunId)}
+        @{Name='DefenderPerfRecordings';Enabled=$defenderOutputsEnabled;Path=(Join-Path $RawPath "DefenderPerfRecordings_$RunId.csv")},
+        @{Name='DefenderReports';Enabled=$defenderOutputsEnabled;Path=(Join-Path (Join-Path $RunOutputPath '..\..\DefenderPerf') $RunId)}
     )
     foreach ($definition in $definitions) {
         New-OutputManifestRow -LogicalName $definition.Name -Expected ([bool]$definition.Enabled) -Enabled ([bool]$definition.Enabled) -Path $definition.Path -Delimiter $Delimiter
@@ -1964,7 +1966,7 @@ finally {
         $manifestPath = Join-Path $rawPath "OutputFileManifest_$runId.csv"
         $runManifestPath = Join-Path $runOutputPath 'OutputFileManifest.csv'
         $measurementErrorCountValue = @($allServerRows | Where-Object { $_.Status -eq 'ERROR' }).Count
-        $preSummaryManifestRows = @(New-OutputFileManifestRows -Settings $settings -RunId $runId -RawPath $rawPath -SummaryPath $summaryPath -LogPath $logPath -RunOutputPath $runOutputPath -Delimiter $settings.OutputDelimiter | Where-Object { $_.LogicalName -notin @('RunSummary','RunSummaryText') })
+        $preSummaryManifestRows = @(New-OutputFileManifestRows -Settings $settings -RunId $runId -RawPath $rawPath -SummaryPath $summaryPath -LogPath $logPath -RunOutputPath $runOutputPath -Delimiter $settings.OutputDelimiter -DefenderRecordingsStarted $defenderStartedCount | Where-Object { $_.LogicalName -notin @('RunSummary','RunSummaryText') })
         $statusInfo = New-RunStatusInfo -MeasurementErrorCount $measurementErrorCountValue -PostProcessingErrors $postProcessingErrors -ManifestRows $preSummaryManifestRows
         foreach ($summaryRow in $runSummaryRows) {
             $summaryRow | Add-Member -MemberType NoteProperty -Name DefenderPerfRecordingTriggered -Value $defenderTriggered -Force
@@ -2008,14 +2010,25 @@ finally {
         Export-Rows -Rows $runSummaryRows -Path (Join-Path $runOutputPath 'RunSummary.csv') -Delimiter $settings.OutputDelimiter
         New-RunSummaryText -SummaryRows $runSummaryRows -Start $runStart -End $runEnd | Set-Content -LiteralPath $summaryTxt -Encoding UTF8
         New-RunSummaryText -SummaryRows $runSummaryRows -Start $runStart -End $runEnd | Set-Content -LiteralPath (Join-Path $runOutputPath 'RunSummary.txt') -Encoding UTF8
-        $manifestRows = @(New-OutputFileManifestRows -Settings $settings -RunId $runId -RawPath $rawPath -SummaryPath $summaryPath -LogPath $logPath -RunOutputPath $runOutputPath -Delimiter $settings.OutputDelimiter)
-        $manifestRows += New-OutputManifestRow -LogicalName 'OutputFileManifest' -Expected $true -Enabled $true -Path $manifestPath -Delimiter $settings.OutputDelimiter
-        $manifestRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $manifestPath -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
+        $manifestRows = @(New-OutputFileManifestRows -Settings $settings -RunId $runId -RawPath $rawPath -SummaryPath $summaryPath -LogPath $logPath -RunOutputPath $runOutputPath -Delimiter $settings.OutputDelimiter -DefenderRecordingsStarted $defenderStartedCount)
+        $manifestTempPath = "$manifestPath.tmp"
+        $manifestRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $manifestTempPath -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
+        Move-Item -LiteralPath $manifestTempPath -Destination $manifestPath -Force
+        $manifestRows += New-OutputManifestRow -LogicalName 'OutputFileManifest' -Expected $true -Enabled $true -Path $manifestPath -Delimiter $settings.OutputDelimiter -WriteSucceededOverride $true
+        $manifestRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $manifestTempPath -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
+        Move-Item -LiteralPath $manifestTempPath -Destination $manifestPath -Force
         $manifestRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $runManifestPath -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
+        $statusInfo = New-RunStatusInfo -MeasurementErrorCount $measurementErrorCountValue -PostProcessingErrors $postProcessingErrors -ManifestRows $manifestRows
         $createdList = @($manifestRows | Where-Object { Get-BooleanValue (Get-SafePropertyValue -Object $_ -PropertyName 'ExistsAfterWrite' -DefaultValue $false) } | ForEach-Object { $_.LogicalName })
         $expectedList = @($manifestRows | Where-Object { Get-BooleanValue (Get-SafePropertyValue -Object $_ -PropertyName 'Expected' -DefaultValue $false) } | ForEach-Object { $_.LogicalName })
         $failedList = @($manifestRows | Where-Object { (Get-BooleanValue (Get-SafePropertyValue -Object $_ -PropertyName 'Expected' -DefaultValue $false)) -and -not (Get-BooleanValue (Get-SafePropertyValue -Object $_ -PropertyName 'ExistsAfterWrite' -DefaultValue $false)) } | ForEach-Object { $_.LogicalName })
         foreach ($summaryRow in $runSummaryRows) {
+            $summaryRow | Add-Member -MemberType NoteProperty -Name RunStatus -Value $statusInfo.RunStatus -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name MeasurementStatus -Value $statusInfo.MeasurementStatus -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name PostProcessingStatus -Value $statusInfo.PostProcessingStatus -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name MeasurementErrorCount -Value $statusInfo.MeasurementErrorCount -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name PostProcessingErrorCount -Value $statusInfo.PostProcessingErrorCount -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name PostProcessingErrors -Value $statusInfo.PostProcessingErrors -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name OutputFilesExpectedCount -Value $expectedList.Count -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name OutputFilesCreatedCount -Value $createdList.Count -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name OutputFilesFailedCount -Value $failedList.Count -Force
