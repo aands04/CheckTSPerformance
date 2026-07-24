@@ -625,7 +625,12 @@ function Complete-HealthCheckRun {
         Add-StatusLine "Letzte Zusammenfassung: $($latestSummary.FullName)"
         try {
             $summaryRows = @(Import-Csv -LiteralPath $latestSummary.FullName -Delimiter (Get-SettingValue -Settings (Read-SettingsFile) -Name 'OutputDelimiter' -DefaultValue ';') -ErrorAction Stop)
-            if ($summaryRows.Count -gt 0 -and $summaryRows[0].PSObject.Properties.Name -contains 'RunStatus') { Add-StatusLine "RunStatus: $($summaryRows[0].RunStatus)" }
+            if ($summaryRows.Count -gt 0) {
+                $firstSummaryRow = $summaryRows[0]
+                foreach ($statusPropertyName in @('RunStatus','MeasurementStatus','PostProcessingStatus','MeasurementErrorCount','PostProcessingErrorCount')) {
+                    if ($firstSummaryRow.PSObject.Properties.Name -contains $statusPropertyName) { Add-StatusLine ("{0}: {1}" -f $statusPropertyName, $firstSummaryRow.$statusPropertyName) }
+                }
+            }
         }
         catch { Add-StatusLine "RunStatus konnte nicht gelesen werden: $($_.Exception.Message)" }
     }

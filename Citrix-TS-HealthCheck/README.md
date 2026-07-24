@@ -361,3 +361,13 @@ Die WEM-CPU-Spike-Protection-Nachverarbeitung normalisiert Prozessnamen zentral 
 Monitoring-Prozesse wie `wsmprovhost`, `powershell`, `pwsh` und `WmiPrvSE` werden nur dann als `HealthCheck/WinRM` markiert, wenn CommandLine, Parent-Prozess, RunId oder Scriptpfad eine belastbare Zuordnung zum aktuellen HealthCheck liefern. Ohne diesen Nachweis bleibt `WmiPrvSE` als `Monitoring/WMI` auswertbar. Die RunSummary ergaenzt dafuer `CpuAverageIncludingHealthCheck`, `CpuAverageExcludingHealthCheck`, `HealthCheckCpuAverage`, `HealthCheckCpuMaximum`, `HealthCheckCpuP95` und `HealthCheckProcessSampleCount`.
 
 Der Laufstatus unterscheidet kuenftig Messung und Nachverarbeitung ueber `RunStatus`, `MeasurementStatus` und `PostProcessingStatus`. Empfohlene Exitcodes: `0` fuer vollstaendigen Erfolg, `2` fuer erfolgreiche Messung mit fehlerhafter Teil-Nachverarbeitung, `1` fuer fehlgeschlagene Hauptmessung. Die GUI zeigt den numerischen Exitcode und liest den RunStatus aus der neuesten RunSummary aus.
+
+### Regression 12-Minuten-Lauf: WEM-Parsing, HealthCheck-CPU und Output-Manifest
+
+Der WEM-Parser erkennt zusaetzlich das Format `Initializing CPU spike protection for process <Name> (ID: <PID>), created by user <DOMAIN\\User>` und trennt `Process CPU` von `System CPU`. `CpuPercent` wird aus `Process CPU` gelesen, `WemReportedSystemCpuPercent` aus `System CPU`; Dezimalkomma und Dezimalpunkt werden invariant mit Punkt exportiert.
+
+Das verwendete HealthCheck-Konto wird zu Laufbeginn ueber die Windows-Identitaet ermittelt und als `HealthCheckAccountName` in RunLog, Effective Configuration und RunSummary ausgegeben. `wsmprovhost.exe -Embedding` wird nur dann als `HealthCheck/WinRM` klassifiziert, wenn Owner, CommandLine und Messzeitpunkt zum aktuellen Lauf passen. `WmiPrvSE` bleibt ohne diese belastbaren Nachweise `Monitoring/WMI`.
+
+Die CPU-Bereinigung erfolgt pro Server-Sample: `HealthCheckCpuAtSample = Sum(ProcessCpuServerPercent der IsHealthCheckProcess=True-Prozesse)`, `CpuExcludingHealthCheckAtSample = Max(0, Min(ServerCpuPercent, ServerCpuPercent - HealthCheckCpuAtSample))`. Danach werden Durchschnitt, Maximum, P95 und Summe ueber die Sample-Zeitpunkte aggregiert; ohne erkannte HealthCheck-Prozesse sind inklusive und exklusive CPU identisch.
+
+Am Laufende wird `OutputFileManifest_<RunId>.csv` erzeugt. Es enthaelt fuer jede erwartete oder optionale Ausgabedatei LogicalName, Aktivierung, Pfad, Existenz, RowCount, Dateigroesse und Schreibstatus. RunSummary enthaelt daraus `OutputFilesExpectedCount`, `OutputFilesCreatedCount`, `OutputFilesFailedCount`, `OutputFilesExpected`, `OutputFilesCreated`, `OutputFilesFailed` und `OutputFileManifestPath`.
