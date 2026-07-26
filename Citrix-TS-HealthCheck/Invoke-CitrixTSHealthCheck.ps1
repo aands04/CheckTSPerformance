@@ -238,6 +238,39 @@ function Export-Rows {
     $Rows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $Path -Delimiter $Delimiter -NoTypeInformation -Append -Encoding UTF8
 }
 
+$script:WemEventContextColumns = @('RunId','Server','AlertId','TriggerProcessName','TriggerProcessCpuServerPercent','TriggerThreshold','TriggerTimestamp','TimeCreated','LogName','ProviderName','EventId','Level','Message')
+
+function ConvertTo-WemEventContextRow {
+    param([Parameter(ValueFromPipeline=$true)]$InputObject)
+    process {
+        $row = [ordered]@{}
+        foreach ($column in $script:WemEventContextColumns) {
+            $property = if ($null -ne $InputObject) { $InputObject.PSObject.Properties[$column] } else { $null }
+            if ($null -ne $property) { $row[$column] = $property.Value } else { $row[$column] = '' }
+        }
+        [pscustomobject]$row
+    }
+}
+
+function Write-HeaderOnlyCsv {
+    param([string[]]$Columns, [string]$Path, [string]$Delimiter)
+    $parent = Split-Path -Parent $Path
+    if ($parent) { Ensure-Directory $parent }
+    $header = ($Columns | ForEach-Object { '"' + ($_ -replace '"','""') + '"' }) -join $Delimiter
+    Set-Content -LiteralPath $Path -Value $header -Encoding UTF8
+}
+
+function Export-WemEventContextRows {
+    param([array]$Rows, [string]$Path, [string]$Delimiter, [switch]$EnsureHeader)
+    $normalizedRows = @($Rows | ConvertTo-WemEventContextRow)
+    if ($normalizedRows.Count -gt 0) {
+        $normalizedRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $Path -Delimiter $Delimiter -NoTypeInformation -Append -Encoding UTF8
+    }
+    elseif ($EnsureHeader -and -not (Test-Path -LiteralPath $Path)) {
+        Write-HeaderOnlyCsv -Columns $script:WemEventContextColumns -Path $Path -Delimiter $Delimiter
+    }
+}
+
 
 $script:DefenderPerfRecordingColumns = @(
     'RunId','Server','TriggerTimestamp','TriggerProcessName','TriggerProcessCpuServerPercent','TriggerThreshold','TriggerReason',
@@ -1328,8 +1361,8 @@ function Receive-DetailDiagnosticJobs {
             $rows = @(Receive-Job -Job $job -ErrorAction SilentlyContinue)
             $eventRows = @($rows | Where-Object { $_.RecordType -eq 'Event' } | Select-Object RunId,Server,AlertId,TriggerProcessName,TriggerProcessCpuServerPercent,TriggerThreshold,TriggerTimestamp,TimeCreated,LogName,ProviderName,EventId,Level,Message)
             foreach ($errorRow in @($rows | Where-Object { $_.RecordType -eq 'Error' })) { if ($RunLogFile) { Write-RunLog -Path $RunLogFile -Level 'WARN' -Message "WEM EventContext: $($errorRow.Server): $($errorRow.Message)" } }
-            Export-Rows -Rows $eventRows -Path (Join-Path $RawPath "WemEventContext_$RunId.csv") -Delimiter $Delimiter
-            Export-Rows -Rows $eventRows -Path (Join-Path $RunOutputPath 'WemEventContext.csv') -Delimiter $Delimiter
+            Export-WemEventContextRows -Rows $eventRows -Path (Join-Path $RawPath "WemEventContext_$RunId.csv") -Delimiter $Delimiter -EnsureHeader
+            Export-WemEventContextRows -Rows $eventRows -Path (Join-Path $RunOutputPath 'WemEventContext.csv') -Delimiter $Delimiter -EnsureHeader
             foreach ($tail in @($rows | Where-Object { $_.RecordType -eq 'Tail' -and $_.Content })) {
                 $safeServer = $tail.Server -replace '[^A-Za-z0-9_.-]', '_'
                 $stamp = (Get-Date).ToString('yyyyMMdd_HHmmss')
@@ -1693,6 +1726,8 @@ $wemCpuSpikeProtectionOutputPath = Join-Path $rawPath "WemCpuSpikeProtectionEven
 $wemCpuSpikeProtectionSummaryOutputPath = Join-Path $rawPath "WemCpuSpikeProtectionSummary_$runId.csv"
 $wemCpuSpikeProtectionQueryDiagnosticsOutputPath = Join-Path $rawPath "WemCpuSpikeProtectionQueryDiagnostics_$runId.csv"
 $eventContextOutputPath = Join-Path $rawPath "EventContext_$runId.csv"
+$wemEventContextOutputPath = Join-Path $rawPath "WemEventContext_$runId.csv"
+$wemEventContextRunOutputPath = Join-Path $runOutputPath 'WemEventContext.csv'
 $allServerRows = @()
 $allProcessRows = @()
 $defenderJobs = @()
@@ -1702,6 +1737,8 @@ $defenderTriggeredServers = @{}
 $defenderTriggered = $false
 $wemTriggered = $false
 $wemEventContextLastTriggerByServer = @{}
+$wemEventContextTriggerCount = 0
+$wemEventContextQueryCount = 0
 $healthCheckAccountName = Get-HealthCheckAccountName
 $script:HealthCheckAccountNameForLog = $healthCheckAccountName
 $postProcessingErrors = @()
@@ -1807,6 +1844,8 @@ try {
                 if ($cooldownOk) {
                     $wemEventContextLastTriggerByServer[$item.TargetServer] = $sampleTime
                     $wemTriggered = $true
+                    $wemEventContextTriggerCount++
+                    $wemEventContextQueryCount++
                     $wemAlertId = '{0}_{1}_{2}_WEM' -f $runId, ($item.TargetServer -replace '[^A-Za-z0-9_.-]', '_'), ($serverSample.Timestamp -replace '[:]', '')
                     $wemTriggerName = 'Category:Wem'
                     $wemTriggerCpu = $wemCpu
@@ -1952,7 +1991,27 @@ finally {
         if ($wemSpikeQueryErrors -gt 0) { $postProcessingErrors += "WEM query errors: $wemSpikeQueryErrors" }
         if ($settings.IncludeWemCpuSpikeProtectionEvents) { Write-RunLog -Path $runLogFile -Message ("WemCpuSpikeProtectionEventsTotal={0}, WemCpuSpikeProtectionEvent7001Count={1}, WemCpuSpikeProtectionEvent7002Count={2}, WemCpuSpikeProtectionEvent7003Count={3}, WemCpuSpikeProtectionEvent7004Count={4}, WemCpuSpikeProtectionParseErrors={5}, WemCpuSpikeProtectionQueryErrors={6}, WemCpuSpikeProtectionServersWithEvents={7}, WemCpuSpikeProtectionOutputPath={8}, WemCpuSpikeProtectionSummaryOutputPath={9}, WemCpuSpikeProtectionQueryDiagnosticsOutputPath={10}, WemCpuSpikeProtectionEventsMatched={11}, WemCpuSpikeProtectionEventsUnmatched={12}" -f $wemSpikeEventTotal, $wemSpike7001Count, $wemSpike7002Count, $wemSpike7003Count, $wemSpike7004Count, $wemSpikeParseErrors, $wemSpikeQueryErrors, $wemSpikeServersWithEvents, $wemCpuSpikeProtectionOutputPath, $wemCpuSpikeProtectionSummaryOutputPath, $wemCpuSpikeProtectionQueryDiagnosticsOutputPath, $wemSpikeMatchedCount, $wemSpikeUnmatchedCount) }
         $defenderRecordingRows = @(Import-CsvIfExists -Path (Join-Path $rawPath "DefenderPerfRecordings_$runId.csv") -Delimiter $settings.OutputDelimiter)
-        $wemEventRows = @(Import-CsvIfExists -Path (Join-Path $rawPath "WemEventContext_$runId.csv") -Delimiter $settings.OutputDelimiter)
+        $wemEventContextOutputError = ''
+        if ($settings.IncludeWemEventContext) {
+            try {
+                Export-WemEventContextRows -Rows @() -Path $wemEventContextOutputPath -Delimiter $settings.OutputDelimiter -EnsureHeader
+                Export-WemEventContextRows -Rows @() -Path $wemEventContextRunOutputPath -Delimiter $settings.OutputDelimiter -EnsureHeader
+            }
+            catch {
+                $wemEventContextOutputError = $_.Exception.Message
+                $postProcessingErrors += "WEM EventContext Exportfehler: $wemEventContextOutputError"
+                Write-RunLog -Path $runLogFile -Level 'ERROR' -Message "WemEventContext Export fehlgeschlagen: $wemEventContextOutputError"
+            }
+        }
+        $wemEventRows = @(Import-CsvIfExists -Path $wemEventContextOutputPath -Delimiter $settings.OutputDelimiter)
+        $wemEventContextRowsCount = @($wemEventRows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.EventId) }).Count
+        $wemEventContextOutputCreated = Test-Path -LiteralPath $wemEventContextOutputPath
+        $wemEventContextHeaderOnly = ([bool]$wemEventContextOutputCreated -and $wemEventContextRowsCount -eq 0)
+        $wemEventContextQueryErrors = 0
+        if ($settings.IncludeWemEventContext) {
+            Write-RunLog -Path $runLogFile -Message ("WemEventContext: Enabled=True, TriggerCount={0}, QueryCount={1}, Rows={2}, OutputCreated={3}, HeaderOnly={4}, QueryErrors={5}, OutputPath={6}, OutputError={7}" -f $wemEventContextTriggerCount, $wemEventContextQueryCount, $wemEventContextRowsCount, $wemEventContextOutputCreated, $wemEventContextHeaderOnly, $wemEventContextQueryErrors, $wemEventContextOutputPath, $wemEventContextOutputError)
+        }
+        else { Write-RunLog -Path $runLogFile -Message 'WemEventContext: Enabled=False, Expected=False' }
         $defenderStartedCount = @($defenderRecordingRows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.TriggerTimestamp) -and -not [string]::IsNullOrWhiteSpace([string]$_.TriggerProcessName) -and $_.Status -in @('Pending','Running','Completed','Failed','TimedOut','ReportFailed','CopyFailed') }).Count
         $defenderReportOkCount = @($defenderRecordingRows | Where-Object { $_.ReportGenerationStatus -eq 'Completed' }).Count
         $defenderCopyOkCount = @($defenderRecordingRows | Where-Object { $_.CopyStatus -eq 'Completed' }).Count
@@ -1971,6 +2030,15 @@ finally {
         foreach ($summaryRow in $runSummaryRows) {
             $summaryRow | Add-Member -MemberType NoteProperty -Name DefenderPerfRecordingTriggered -Value $defenderTriggered -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextTriggered -Value $wemTriggered -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextEnabled -Value ([bool]$settings.IncludeWemEventContext) -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextTriggerCount -Value $wemEventContextTriggerCount -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextQueryCount -Value $wemEventContextQueryCount -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextRows -Value $wemEventContextRowsCount -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextQueryErrors -Value $wemEventContextQueryErrors -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextOutputCreated -Value $wemEventContextOutputCreated -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextHeaderOnly -Value $wemEventContextHeaderOnly -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextOutputPath -Value $wemEventContextOutputPath -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextOutputError -Value $wemEventContextOutputError -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name HealthCheckAccountName -Value $healthCheckAccountName -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name DefenderRecordingAverageStartDelaySeconds -Value $defenderAverageDelay -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name DefenderRecordingMaximumStartDelaySeconds -Value $defenderMaximumDelay -Force
