@@ -68,6 +68,9 @@ $script:ExitCode = 0
 $script:CliBoundParameters = @{}
 foreach ($key in $PSBoundParameters.Keys) { $script:CliBoundParameters[$key] = $PSBoundParameters[$key] }
 $script:SettingSources = @{}
+$script:ScriptVersion = '1.1.0'
+$script:OutputSchemaVersion = '2'
+$script:RunOwnedOutputFiles = @{}
 
 
 function Resolve-ScriptRoot {
@@ -216,6 +219,60 @@ function Ensure-Directory {
     if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null }
 }
 
+function Resolve-UniqueRunIdentity {
+    param([string]$RequestedRunId, [string]$OutputPath, [datetime]$StartTime = (Get-Date))
+    $safeRequested = ([string]$RequestedRunId).Trim() -replace '[^A-Za-z0-9_.-]', '_'
+    $stamp = $StartTime.ToString('yyyyMMdd_HHmmss')
+    if ([string]::IsNullOrWhiteSpace($safeRequested)) { $baseId = "CitrixTSHealthCheck_$stamp" }
+    elseif ($safeRequested -match '(?<!\d)\d{8}[_-]\d{6}(?!\d)') { $baseId = $safeRequested }
+    else { $baseId = "${safeRequested}_$stamp" }
+    $effective = $baseId; $suffix = 0
+    $runsRoot = Join-Path $OutputPath 'runs'
+    while ((Test-Path -LiteralPath (Join-Path $runsRoot $effective)) -or
+           @(Get-ChildItem -LiteralPath $OutputPath -Recurse -File -Filter "*${effective}*" -ErrorAction SilentlyContinue).Count -gt 0) {
+        $suffix++; $effective = '{0}_{1:00}' -f $baseId, $suffix
+    }
+    [pscustomobject]@{
+        RequestedRunId = $RequestedRunId
+        EffectiveRunId = $effective
+        RunInstanceId = [guid]::NewGuid().ToString()
+        RunStartTime = $StartTime
+        RunStartTimeUtc = $StartTime.ToUniversalTime()
+        RunIdCollisionDetected = ($suffix -gt 0)
+        RunIdCollisionResolution = if ($suffix -gt 0) { "Suffix _{0:00}" -f $suffix } else { 'NotRequired' }
+    }
+}
+
+function Get-ExportSchemaHash {
+    param([string[]]$Columns)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes((@($Columns | Sort-Object) -join "`n"))
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
+}
+
+function Write-AtomicText {
+    param([string]$Path, [string[]]$Content)
+    $temporaryPath = "$Path.$($script:RunInstanceId).tmp"
+    $Content | Set-Content -LiteralPath $temporaryPath -Encoding UTF8
+    if (-not (Test-Path -LiteralPath $temporaryPath)) { throw "Temporaere Ausgabedatei wurde nicht erstellt: $temporaryPath" }
+    Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+}
+
+function Export-AtomicCsv {
+    param([array]$Rows, [string]$Path, [string]$Delimiter)
+    if (-not $Rows -or $Rows.Count -eq 0) { throw "Atomarer CSV-Export benoetigt mindestens ein Objekt: $Path" }
+    $temporaryPath = "$Path.$($script:RunInstanceId).tmp"
+    $normalized = @($Rows | ConvertTo-InvariantObject)
+    $normalized | Export-Csv -LiteralPath $temporaryPath -Delimiter $Delimiter -NoTypeInformation -Encoding UTF8
+    $expected = @($normalized[0].PSObject.Properties.Name)
+    $actual = @((Import-Csv -LiteralPath $temporaryPath -Delimiter $Delimiter | Select-Object -First 1).PSObject.Properties.Name)
+    if ((Compare-Object $expected $actual).Count -gt 0) { throw "CSV-Schemavalidierung fehlgeschlagen: $Path" }
+    Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+    $script:RunOwnedOutputFiles[$Path] = Get-ExportSchemaHash $expected
+}
+
 function ConvertTo-InvariantObject {
     param([Parameter(ValueFromPipeline=$true)]$InputObject)
     process {
@@ -228,6 +285,11 @@ function ConvertTo-InvariantObject {
             }
             else { $copy[$property.Name] = $value }
         }
+        if ($copy.Contains('RunId') -and $script:EffectiveRunId) {
+            if (-not $copy.Contains('RequestedRunId')) { $copy['RequestedRunId'] = $script:RequestedRunId }
+            if (-not $copy.Contains('EffectiveRunId')) { $copy['EffectiveRunId'] = $script:EffectiveRunId }
+            if (-not $copy.Contains('RunInstanceId')) { $copy['RunInstanceId'] = $script:RunInstanceId }
+        }
         [pscustomobject]$copy
     }
 }
@@ -235,10 +297,29 @@ function ConvertTo-InvariantObject {
 function Export-Rows {
     param([array]$Rows, [string]$Path, [string]$Delimiter)
     if (-not $Rows -or $Rows.Count -eq 0) { return }
-    $Rows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $Path -Delimiter $Delimiter -NoTypeInformation -Append -Encoding UTF8
+    $normalized = @($Rows | ConvertTo-InvariantObject)
+    $columns = @($normalized[0].PSObject.Properties.Name)
+    $schemaHash = Get-ExportSchemaHash $columns
+    if (-not $script:RunOwnedOutputFiles.ContainsKey($Path)) {
+        if (Test-Path -LiteralPath $Path) {
+            $existingColumns = @((Import-Csv -LiteralPath $Path -Delimiter $Delimiter | Select-Object -First 1).PSObject.Properties.Name)
+            $existingHash = Get-ExportSchemaHash $existingColumns
+            if ($existingHash -ne $schemaHash) {
+                $difference = Compare-Object $existingColumns $columns
+                throw "CSV-Schema innerhalb der RunInstanceId geaendert ($Path): $($difference -join '; ')"
+            }
+        } else {
+            $normalized | Export-Csv -LiteralPath $Path -Delimiter $Delimiter -NoTypeInformation -Encoding UTF8
+            $script:RunOwnedOutputFiles[$Path] = $schemaHash
+            return
+        }
+        $script:RunOwnedOutputFiles[$Path] = $schemaHash
+    }
+    elseif ($script:RunOwnedOutputFiles[$Path] -ne $schemaHash) { throw "CSV-Schema innerhalb der RunInstanceId geaendert: $Path" }
+    $normalized | Export-Csv -LiteralPath $Path -Delimiter $Delimiter -NoTypeInformation -Append -Encoding UTF8
 }
 
-$script:WemEventContextColumns = @('RunId','Server','AlertId','TriggerProcessName','TriggerProcessCpuServerPercent','TriggerThreshold','TriggerTimestamp','TimeCreated','LogName','ProviderName','EventId','Level','Message')
+$script:WemEventContextColumns = @('RunId','Server','AlertId','TriggerProcessName','TriggerProcessCpuServerPercent','TriggerThreshold','TriggerTimestamp','TimeCreated','LogName','ProviderName','EventId','Level','Message','RecordId','DuplicateCount','DeduplicationKeyType','DeduplicationKey')
 
 function ConvertTo-WemEventContextRow {
     param([Parameter(ValueFromPipeline=$true)]$InputObject)
@@ -254,17 +335,19 @@ function ConvertTo-WemEventContextRow {
 
 function Write-HeaderOnlyCsv {
     param([string[]]$Columns, [string]$Path, [string]$Delimiter)
+    if ($Columns -contains 'RunId' -and $script:EffectiveRunId) { $Columns = @($Columns + @('RequestedRunId','EffectiveRunId','RunInstanceId') | Select-Object -Unique) }
     $parent = Split-Path -Parent $Path
     if ($parent) { Ensure-Directory $parent }
     $header = ($Columns | ForEach-Object { '"' + ($_ -replace '"','""') + '"' }) -join $Delimiter
     Set-Content -LiteralPath $Path -Value $header -Encoding UTF8
+    $script:RunOwnedOutputFiles[$Path] = Get-ExportSchemaHash $Columns
 }
 
 function Export-WemEventContextRows {
     param([array]$Rows, [string]$Path, [string]$Delimiter, [switch]$EnsureHeader)
     $normalizedRows = @($Rows | ConvertTo-WemEventContextRow)
     if ($normalizedRows.Count -gt 0) {
-        $normalizedRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $Path -Delimiter $Delimiter -NoTypeInformation -Append -Encoding UTF8
+        Export-Rows -Rows $normalizedRows -Path $Path -Delimiter $Delimiter
     }
     elseif ($EnsureHeader -and -not (Test-Path -LiteralPath $Path)) {
         Write-HeaderOnlyCsv -Columns $script:WemEventContextColumns -Path $Path -Delimiter $Delimiter
@@ -368,6 +451,29 @@ function Normalize-ProcessName {
     return $value.Trim().ToLowerInvariant()
 }
 
+function ConvertFrom-LocalizedNumber {
+    param([AllowNull()][object]$Value)
+    $original = if ($null -eq $Value) { '' } else { [string]$Value }
+    $result = [ordered]@{ ParseSucceeded=$false; ParsedValue=$null; OriginalValue=$original; CultureUsed=''; ParseError='' }
+    if ([string]::IsNullOrWhiteSpace($original)) { $result.ParseError='EmptyValue'; return [pscustomobject]$result }
+    $clean = ($original -replace '%','' -replace "[\s\u00A0\u202F]",'').Trim()
+    $styles = [Globalization.NumberStyles]::Float
+    foreach ($cultureName in @('de-DE','')) {
+        $culture = if ($cultureName) { [Globalization.CultureInfo]::GetCultureInfo($cultureName) } else { [Globalization.CultureInfo]::InvariantCulture }
+        $parsed = 0.0
+        if ([double]::TryParse($clean, $styles, $culture, [ref]$parsed)) {
+            $result.ParseSucceeded=$true; $result.ParsedValue=$parsed; $result.CultureUsed=if($cultureName){$cultureName}else{'InvariantCulture'}; return [pscustomobject]$result
+        }
+    }
+    if ($clean -match '^-?\d+,\d+$') {
+        $parsed = 0.0
+        if ([double]::TryParse(($clean -replace ',','.'), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
+            $result.ParseSucceeded=$true; $result.ParsedValue=$parsed; $result.CultureUsed='CommaToInvariant'; return [pscustomobject]$result
+        }
+    }
+    $result.ParseError="UnsupportedNumberFormat: $original"; [pscustomobject]$result
+}
+
 
 function Normalize-AccountName {
     param([AllowNull()][object]$AccountName)
@@ -402,19 +508,23 @@ function Get-CsvRowCount {
 
 function New-OutputManifestRow {
     param([string]$LogicalName, [bool]$Expected, [bool]$Enabled, [string]$Path, [string]$Delimiter, [Nullable[bool]]$WriteSucceededOverride = $null)
-    $exists = $false; $size = 0; $rows = 0; $errorType = ''; $errorMessage = ''
+    $exists = $false; $size = 0; $rows = 0; $errorType = ''; $errorMessage = ''; $schemaHash = ''
     try {
         $exists = Test-Path -LiteralPath $Path
         if ($exists) {
             $item = Get-Item -LiteralPath $Path -ErrorAction Stop
             $size = $item.Length
-            if ($Path -like '*.csv') { $rows = Get-CsvRowCount -Path $Path -Delimiter $Delimiter }
+            if ($Path -like '*.csv') {
+                $rows = Get-CsvRowCount -Path $Path -Delimiter $Delimiter
+                $firstLine = Get-Content -LiteralPath $Path -Encoding UTF8 -TotalCount 1
+                if ($firstLine) { $headerProbe = @((ConvertFrom-Csv -InputObject @($firstLine, '') -Delimiter $Delimiter | Select-Object -First 1).PSObject.Properties.Name); if($headerProbe.Count){$schemaHash=Get-ExportSchemaHash $headerProbe} }
+            }
         }
     }
     catch { $errorType = $_.Exception.GetType().FullName; $errorMessage = $_.Exception.Message }
     $writeSucceeded = if ($null -ne $WriteSucceededOverride) { [bool]$WriteSucceededOverride } elseif (-not $Expected -and -not $Enabled) { $true } else { ($exists -and [string]::IsNullOrWhiteSpace($errorMessage)) }
     [pscustomobject]@{
-        LogicalName=$LogicalName; Expected=$Expected; Enabled=$Enabled; OutputPath=$Path; Created=$exists; ExistsAfterWrite=$exists; RowCount=$rows; FileSizeBytes=$size; WriteSucceeded=$writeSucceeded; ErrorType=$errorType; ErrorMessage=$errorMessage
+        LogicalName=$LogicalName; Expected=$Expected; Enabled=$Enabled; OutputPath=$Path; Created=$exists; ExistsAfterWrite=$exists; RowCount=$rows; FileSizeBytes=$size; WriteSucceeded=$writeSucceeded; ErrorType=$errorType; ErrorMessage=$errorMessage; RequestedRunId=$script:RequestedRunId; EffectiveRunId=$script:EffectiveRunId; RunInstanceId=$script:RunInstanceId; ScriptVersion=$script:ScriptVersion; OutputSchemaVersion=$script:OutputSchemaVersion; ExportSchemaHash=$schemaHash
     }
 }
 
@@ -845,7 +955,8 @@ function Invoke-ServerCollectionRound {
             try {
                 Test-WSMan -ComputerName $Server -ErrorAction Stop | Out-Null
                 $remoteBlock = [scriptblock]::Create($RemoteScript)
-                $result = Invoke-Command -ComputerName $Server -ScriptBlock $remoteBlock -ArgumentList $SettingsHash.CpuSampleSeconds, $SettingsHash.TopProcessCount, $SettingsHash.AlertTopProcessCount, $SettingsHash.CpuWarningThreshold, $SettingsHash.CpuCriticalThreshold, $SettingsHash.IncludeEventLogContext, $SettingsHash.AnonymizeUsers, $SettingsHash.MaxEventsPerAlert, $(if ($SettingsHash.PSObject.Properties.Name -contains 'MaxForcedProcessesPerCategory') { $SettingsHash.MaxForcedProcessesPerCategory } else { 10 }) -ErrorAction Stop
+                # Allgemeiner EventContext wird aus zusammengefuehrten Triggerfenstern in der Finalisierung gelesen.
+                $result = Invoke-Command -ComputerName $Server -ScriptBlock $remoteBlock -ArgumentList $SettingsHash.CpuSampleSeconds, $SettingsHash.TopProcessCount, $SettingsHash.AlertTopProcessCount, $SettingsHash.CpuWarningThreshold, $SettingsHash.CpuCriticalThreshold, $false, $SettingsHash.AnonymizeUsers, $SettingsHash.MaxEventsPerAlert, $(if ($SettingsHash.PSObject.Properties.Name -contains 'MaxForcedProcessesPerCategory') { $SettingsHash.MaxForcedProcessesPerCategory } else { 10 }) -ErrorAction Stop
                 [pscustomobject]@{ TargetServer = $Server; Status = 'OK'; Result = $result; ErrorMessage = '' }
             }
             catch {
@@ -1157,7 +1268,7 @@ function Start-WemEventContextJob {
                     try {
                         $events = @(Get-WinEvent -FilterHashtable @{ LogName=$logName; StartTime=$start; EndTime=$end } -MaxEvents $remainingEvents -ErrorAction Stop)
                         foreach ($event in $events) {
-                            [pscustomobject]@{ RecordType='Event'; RunId=$RunId; Server=$env:COMPUTERNAME; AlertId=$AlertId; TriggerProcessName=$TriggerProcessName; TriggerProcessCpuServerPercent=$TriggerProcessCpuServerPercent; TriggerThreshold=$TriggerThreshold; TriggerTimestamp=$TriggerTime.ToString('s'); TimeCreated=$event.TimeCreated; LogName=$logName; ProviderName=$event.ProviderName; EventId=$event.Id; Level=$event.LevelDisplayName; Message=$event.Message; FileName=''; Content='' }
+                            [pscustomobject]@{ RecordType='Event'; RunId=$RunId; Server=$env:COMPUTERNAME; AlertId=$AlertId; TriggerProcessName=$TriggerProcessName; TriggerProcessCpuServerPercent=$TriggerProcessCpuServerPercent; TriggerThreshold=$TriggerThreshold; TriggerTimestamp=$TriggerTime.ToString('s'); TimeCreated=$event.TimeCreated; LogName=$logName; ProviderName=$event.ProviderName; EventId=$event.Id; Level=$event.LevelDisplayName; Message=$event.Message; RecordId=$event.RecordId; FileName=''; Content='' }
                         }
                         $remainingEvents -= $events.Count
                     } catch {
@@ -1359,7 +1470,7 @@ function Receive-DetailDiagnosticJobs {
     foreach ($job in @($WemJobs | Where-Object { $_.State -ne 'Running' })) {
         try {
             $rows = @(Receive-Job -Job $job -ErrorAction SilentlyContinue)
-            $eventRows = @($rows | Where-Object { $_.RecordType -eq 'Event' } | Select-Object RunId,Server,AlertId,TriggerProcessName,TriggerProcessCpuServerPercent,TriggerThreshold,TriggerTimestamp,TimeCreated,LogName,ProviderName,EventId,Level,Message)
+            $eventRows = @($rows | Where-Object { $_.RecordType -eq 'Event' } | Select-Object RunId,Server,AlertId,TriggerProcessName,TriggerProcessCpuServerPercent,TriggerThreshold,TriggerTimestamp,TimeCreated,LogName,ProviderName,EventId,Level,Message,RecordId)
             foreach ($errorRow in @($rows | Where-Object { $_.RecordType -eq 'Error' })) { if ($RunLogFile) { Write-RunLog -Path $RunLogFile -Level 'WARN' -Message "WEM EventContext: $($errorRow.Server): $($errorRow.Message)" } }
             Export-WemEventContextRows -Rows $eventRows -Path (Join-Path $RawPath "WemEventContext_$RunId.csv") -Delimiter $Delimiter -EnsureHeader
             Export-WemEventContextRows -Rows $eventRows -Path (Join-Path $RunOutputPath 'WemEventContext.csv') -Delimiter $Delimiter -EnsureHeader
@@ -1429,15 +1540,81 @@ function Import-CsvIfExists {
 function Export-EmptyCsv {
     param([string]$Path, [string[]]$Columns, [string]$Delimiter)
     if (Test-Path -LiteralPath $Path) { return }
+    if ($Columns -contains 'RunId' -and $script:EffectiveRunId) { $Columns = @($Columns + @('RequestedRunId','EffectiveRunId','RunInstanceId') | Select-Object -Unique) }
     $row = [ordered]@{}
     foreach ($column in $Columns) { $row[$column] = $null }
     [pscustomobject]$row | Export-Csv -LiteralPath $Path -Delimiter $Delimiter -NoTypeInformation -Encoding UTF8
     $content = @(Get-Content -LiteralPath $Path -Encoding UTF8)
     if ($content.Count -gt 0) { $content[0] | Set-Content -LiteralPath $Path -Encoding UTF8 }
+    $script:RunOwnedOutputFiles[$Path] = Get-ExportSchemaHash $Columns
+}
+
+function Merge-EventContextWindows {
+    param([array]$Triggers, [int]$WindowMinutes = 10, [int]$CooldownMinutes = 10)
+    $windows = @()
+    foreach ($serverGroup in @($Triggers | Group-Object Server)) {
+        $ordered = @($serverGroup.Group | Sort-Object TriggerTimestamp)
+        foreach ($trigger in $ordered) {
+            $time = [datetime]$trigger.TriggerTimestamp
+            $start = $time.AddMinutes(-$WindowMinutes); $end = $time.AddMinutes($WindowMinutes)
+            $last = if ($windows.Count) { $windows[-1] } else { $null }
+            if ($last -and $last.Server -eq $serverGroup.Name -and $start -le ([datetime]$last.WindowEnd).AddMinutes($CooldownMinutes)) {
+                if ($end -gt [datetime]$last.WindowEnd) { $last.WindowEnd = $end }
+                $last.SourceTriggerCount++
+                $last.LastTriggerTime = $time
+                $last.TriggerTypes = (@(([string]$last.TriggerTypes -split ',') + [string]$trigger.TriggerType) | Where-Object { $_ } | Select-Object -Unique) -join ','
+            } else {
+                $windows += [pscustomobject]@{ Server=$serverGroup.Name; WindowStart=$start; WindowEnd=$end; SourceTriggerCount=1; FirstTriggerTime=$time; LastTriggerTime=$time; TriggerTypes=[string]$trigger.TriggerType; QueryExecuted=$false }
+            }
+        }
+    }
+    @($windows)
+}
+
+function Get-EventDeduplicationKey {
+    param($Row)
+    $server=[string](Get-SafePropertyValue $Row 'Server' ''); $log=[string](Get-SafePropertyValue $Row 'LogName' ''); $record=[string](Get-SafePropertyValue $Row 'RecordId' '')
+    if (-not [string]::IsNullOrWhiteSpace($record)) { return [pscustomobject]@{ Type='RecordId'; Key="$server|$log|$record" } }
+    $message=[string](Get-SafePropertyValue $Row 'Message' ''); $sha=[Security.Cryptography.SHA256]::Create()
+    try { $messageHash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($message))) -replace '-','').ToLowerInvariant() } finally { $sha.Dispose() }
+    $key='{0}|{1}|{2}|{3}|{4}|{5}' -f $server,$log,(Get-SafePropertyValue $Row 'ProviderName' ''),(Get-SafePropertyValue $Row 'EventId' ''),(Get-SafePropertyValue $Row 'EventTime' (Get-SafePropertyValue $Row 'TimeCreated' '')),$messageHash
+    [pscustomobject]@{ Type='FallbackHash'; Key=$key }
+}
+
+function Get-DeduplicatedEventRows {
+    param([array]$Rows)
+    $prepared = foreach($row in @($Rows)) { $key=Get-EventDeduplicationKey $row; [pscustomobject]@{ Row=$row; Type=$key.Type; Key=$key.Key } }
+    foreach($group in @($prepared | Group-Object Key)) {
+        $entry=$group.Group[0]; $copy=[ordered]@{}
+        foreach($property in $entry.Row.PSObject.Properties){ $copy[$property.Name]=$property.Value }
+        $copy['DuplicateCount']=$group.Count; $copy['DeduplicationKeyType']=$entry.Type; $copy['DeduplicationKey']=$entry.Key
+        [pscustomobject]$copy
+    }
+}
+
+function Invoke-MergedEventContextCollection {
+    param([array]$Windows, [string]$RunId, [int]$MaxEventsPerWindow = 50)
+    $rows=@(); $errors=@()
+    foreach($window in @($Windows)) {
+        try {
+            $result=Invoke-Command -ComputerName $window.Server -ScriptBlock {
+                param($Start,$End,$MaxEvents)
+                $out=@(); foreach($logName in @('Microsoft-Windows-TaskScheduler/Operational','System','Application','Microsoft-Windows-WMI-Activity/Operational','Microsoft-Windows-Windows Defender/Operational','Microsoft-Windows-SENSE/Operational','Citrix WEM Agent')) {
+                    try { $out += Get-WinEvent -FilterHashtable @{LogName=$logName;StartTime=$Start;EndTime=$End} -MaxEvents $MaxEvents -ErrorAction Stop | Select-Object @{n='LogName';e={$logName}},TimeCreated,Id,RecordId,ProviderName,LevelDisplayName,Message } catch { if($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound,*' -and $_.Exception.Message -notlike 'No events were found*'){ [pscustomobject]@{QueryError=$_.Exception.Message;LogName=$logName} } }
+                }; @($out)
+            } -ArgumentList $window.WindowStart,$window.WindowEnd,$MaxEventsPerWindow -ErrorAction Stop
+            $window.QueryExecuted=$true
+            foreach($event in @($result)) {
+                if($event.PSObject.Properties['QueryError']) { $errors += [pscustomobject]@{Server=$window.Server;LogName=$event.LogName;ErrorMessage=$event.QueryError}; continue }
+                $rows += [pscustomobject]@{RunId=$RunId;Timestamp=$window.FirstTriggerTime.ToString('s');Server=$window.Server;TargetServer=$window.Server;ComputerName=$window.Server;LogName=$event.LogName;EventTime=$event.TimeCreated;EventId=$event.Id;RecordId=$event.RecordId;ProviderName=$event.ProviderName;Level=$event.LevelDisplayName;Message=$event.Message}
+            }
+        } catch { $errors += [pscustomobject]@{Server=$window.Server;LogName='';ErrorMessage=$_.Exception.Message} }
+    }
+    [pscustomobject]@{Rows=@($rows);Errors=@($errors);Windows=@($Windows)}
 }
 
 function Get-WemCpuSpikeProtectionColumns {
-    @('RunId','Server','TimeCreated','EventId','RecordId','LogName','ProviderName','Level','ProcessName','ProcessId','UserName','SessionId','CpuPercent','WemReportedSystemCpuPercent','OldPriority','NewPriority','Action','Success','Message','RawEventXml','ParseError','QueryError','ParseSucceeded','ParseMethod','OriginalProcessName','NormalizedProcessName','Matched','CorrelationMethod','CorrelationConfidence','MatchedIsHealthCheckProcess','MatchedIsUserProcess','MatchedIsSystemProcess','MatchedCategory')
+    @('RunId','Server','TimeCreated','EventId','RecordId','LogName','ProviderName','Level','ProcessName','ProcessId','UserName','SessionId','CpuPercent','WemReportedSystemCpuPercent','OldPriority','NewPriority','Action','Success','Message','RawEventXml','ParseError','QueryError','ParseSucceeded','ParseMethod','OriginalProcessName','NormalizedProcessName','Matched','CorrelationMethod','CorrelationConfidence','MatchedIsHealthCheckProcess','MatchedIsUserProcess','MatchedIsSystemProcess','MatchedCategory','ProcessCpuRaw','ProcessCpuPercent','WemReportedSystemCpuRaw','WemCpuValueSemantics','WemCpuIsNormalizedServerPercent','MatchedProcessSampleId','SecondsToMatchedSample','CorrelationError')
 }
 
 function Get-WemCpuSpikeProtectionSummaryColumns {
@@ -1495,6 +1672,14 @@ function Normalize-WemCpuSpikeProtectionEventRows {
                 MatchedIsUserProcess = $false
                 MatchedIsSystemProcess = $false
                 MatchedCategory = ''
+                ProcessCpuRaw = (Get-SafePropertyValue -Object $row -PropertyName 'ProcessCpuRaw' -DefaultValue (Get-SafePropertyValue -Object $row -PropertyName 'CpuPercent' -DefaultValue ''))
+                ProcessCpuPercent = (Get-SafePropertyValue -Object $row -PropertyName 'ProcessCpuPercent' -DefaultValue (Get-SafePropertyValue -Object $row -PropertyName 'CpuPercent' -DefaultValue ''))
+                WemReportedSystemCpuRaw = (Get-SafePropertyValue -Object $row -PropertyName 'WemReportedSystemCpuRaw' -DefaultValue (Get-SafePropertyValue -Object $row -PropertyName 'WemReportedSystemCpuPercent' -DefaultValue ''))
+                WemCpuValueSemantics = (Get-SafePropertyValue -Object $row -PropertyName 'WemCpuValueSemantics' -DefaultValue 'PerCoreSum')
+                WemCpuIsNormalizedServerPercent = (Get-SafePropertyValue -Object $row -PropertyName 'WemCpuIsNormalizedServerPercent' -DefaultValue $false)
+                MatchedProcessSampleId = (Get-SafePropertyValue -Object $row -PropertyName 'MatchedProcessSampleId' -DefaultValue '')
+                SecondsToMatchedSample = (Get-SafePropertyValue -Object $row -PropertyName 'SecondsToMatchedSample' -DefaultValue '')
+                CorrelationError = (Get-SafePropertyValue -Object $row -PropertyName 'CorrelationError' -DefaultValue '')
             }
         }
         catch {
@@ -1511,26 +1696,25 @@ function Invoke-WemCpuSpikeProtectionEventCollection {
             $result = Invoke-Command -ComputerName $server -ScriptBlock {
                 param($RunId, $StartTime, $EndTime)
                 function Normalize-ProcessNameLocal([object]$Name) { if ($null -eq $Name) { return '' }; $v=([string]$Name).Trim(); if (-not $v) { return '' }; $leaf=Split-Path -Leaf $v -ErrorAction SilentlyContinue; if ($leaf) { $v=$leaf }; if ($v.EndsWith('.exe',[System.StringComparison]::OrdinalIgnoreCase)) { $v=$v.Substring(0,$v.Length-4) }; $v.Trim().ToLowerInvariant() }
-                function FirstValue($Map,[string[]]$Names) { foreach($n in $Names){ if($Map.ContainsKey($n) -and -not [string]::IsNullOrWhiteSpace([string]$Map[$n])){ return [string]$Map[$n] }}; return '' }
+                function FirstValue($Map,[string[]]$Names) { foreach($n in $Names){ if($Map.ContainsKey($n) -and -not [string]::IsNullOrWhiteSpace([string]$Map[$n])){ return $Map[$n] }}; return '' }
                 function SetIfEmpty([hashtable]$Map,[string]$Key,[string]$Value){ if(-not $Map.ContainsKey($Key) -or [string]::IsNullOrWhiteSpace([string]$Map[$Key])){ if(-not [string]::IsNullOrWhiteSpace($Value)){ $Map[$Key]=$Value } } }
-                function Convert-WemNumber([string]$Value){ if([string]::IsNullOrWhiteSpace($Value)){ return '' }; $v=$Value.Trim() -replace '%','' -replace '\s',''; if($v -match ',' -and $v -match '\.'){ $v=$v -replace '\.','' -replace ',','.' } else { $v=$v -replace ',','.' }; return $v }
+                function Convert-WemNumber([string]$Value){
+                    $original=if($null -eq $Value){''}else{[string]$Value}; if([string]::IsNullOrWhiteSpace($original)){ return [pscustomobject]@{ParseSucceeded=$false;ParsedValue='';OriginalValue=$original;CultureUsed='';ParseError='EmptyValue'} }
+                    $clean=($original -replace '%','' -replace '[\s\u00A0\u202F]','').Trim(); $styles=[Globalization.NumberStyles]::Float
+                    foreach($cultureName in @('de-DE','')){ $culture=if($cultureName){[Globalization.CultureInfo]::GetCultureInfo($cultureName)}else{[Globalization.CultureInfo]::InvariantCulture}; $number=0.0; if([double]::TryParse($clean,$styles,$culture,[ref]$number)){ return [pscustomobject]@{ParseSucceeded=$true;ParsedValue=$number;OriginalValue=$original;CultureUsed=if($cultureName){$cultureName}else{'InvariantCulture'};ParseError=''} } }
+                    if($clean -match '^-?\d+,\d+$'){ $number=0.0; if([double]::TryParse(($clean -replace ',','.'),[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number)){ return [pscustomobject]@{ParseSucceeded=$true;ParsedValue=$number;OriginalValue=$original;CultureUsed='CommaToInvariant';ParseError=''} } }
+                    [pscustomobject]@{ParseSucceeded=$false;ParsedValue='';OriginalValue=$original;CultureUsed='';ParseError="UnsupportedNumberFormat: $original"}
+                }
                 function Parse-WemMessage([string]$Message,[hashtable]$Parsed){
                     if([string]::IsNullOrWhiteSpace($Message)){ return }
-                    $init=[regex]::Match($Message,'(?is)Initializing\s+CPU\s+spike\s+protection\s+for\s+process\s+([^\s\(,\.]+)(?:\s*\(\s*ID\s*:\s*(\d+)\s*\))?.*?created\s+by\s+user\s+([^\.\r\n]+)')
-                    if($init.Success){ SetIfEmpty $Parsed 'ProcessName' $init.Groups[1].Value.Trim(); SetIfEmpty $Parsed 'ProcessId' $init.Groups[2].Value.Trim(); SetIfEmpty $Parsed 'UserName' $init.Groups[3].Value.Trim() }
-                    $patterns=@{
-                        ProcessName='(?i)(?:process(?:\s*name)?|application|image)\s*[:=]\s*["'']?([^"'',;\r\n]+)';
-                        ProcessId='(?i)\b(?:pid|process\s*id)\s*[:=]\s*(\d+)';
-                        UserName='(?i)\b(?:user(?:name)?|account)\s*[:=]\s*([^,;\r\n\.]+)';
-                        SessionId='(?i)\bsession(?:\s*id)?\s*[:=]\s*(\d+)';
-                        CpuPercent='(?i)\bprocess\s*cpu\s*[:=]\s*([0-9][0-9\.,\s]*)\s*%?';
-                        WemReportedSystemCpuPercent='(?i)\bsystem\s*cpu\s*[:=]\s*([0-9][0-9\.,\s]*)\s*%?';
-                        OldPriority='(?i)\b(?:old|original|previous)\s*priority\s*[:=]\s*([^,;\r\n]+)';
-                        NewPriority='(?i)\b(?:new|target)\s*priority\s*[:=]\s*([^,;\r\n]+)'
-                    }
-                    foreach($key in $patterns.Keys){ $m=[regex]::Match($Message,$patterns[$key]); if($m.Success){ $val=$m.Groups[1].Value.Trim(); if($key -in @('CpuPercent','WemReportedSystemCpuPercent')){ $val=Convert-WemNumber $val }; SetIfEmpty $Parsed $key $val } }
-                    if(-not $Parsed.ContainsKey('CpuPercent')){ $m=[regex]::Match($Message,'(?i)(?<!system\s)cpu\s*[:=]\s*([0-9][0-9\.,\s]*)\s*%?'); if($m.Success){ SetIfEmpty $Parsed 'CpuPercent' (Convert-WemNumber $m.Groups[1].Value) } }
-                    if(-not $Parsed.ContainsKey('ProcessName')){ $m=[regex]::Match($Message,'(?i)([A-Za-z0-9_.-]+\.exe)'); if($m.Success){ SetIfEmpty $Parsed 'ProcessName' $m.Groups[1].Value.Trim() } }
+                    $init=[regex]::Match($Message,'(?is)Initializing\s+CPU\s+spike\s+protection\s+for\s+process\s+(?<Process>[^\r\n(,]+?)\s*\(\s*ID\s*:\s*(?<Pid>\d+)\s*\)\s*,?\s*created\s+by\s+user\s+(?<User>[^\.\r\n]+)\.?')
+                    if($init.Success){ SetIfEmpty $Parsed 'ProcessName' $init.Groups['Process'].Value.Trim(); SetIfEmpty $Parsed 'ProcessId' $init.Groups['Pid'].Value.Trim(); SetIfEmpty $Parsed 'UserName' $init.Groups['User'].Value.Trim(); $Parsed['MessageIdentityMatched']=$true }
+                    $cpu=[regex]::Match($Message,'(?is)sum\s+of\s+average\s+CPU\s+usage\s+per\s+each\s+core\s+detected\s+at\s+(?<ProcessCpu>-?[0-9]+(?:[\.,][0-9]+)?)\s*%\s*,?\s*with\s+a\s+total\s+system\s+CPU\s+usage\s+of\s+(?<SystemCpu>-?[0-9]+(?:[\.,][0-9]+)?)\s*%')
+                    if($cpu.Success){ $processNumber=Convert-WemNumber $cpu.Groups['ProcessCpu'].Value; $systemNumber=Convert-WemNumber $cpu.Groups['SystemCpu'].Value; $Parsed['ProcessCpuRaw']=$processNumber.OriginalValue; $Parsed['WemReportedSystemCpuRaw']=$systemNumber.OriginalValue; if($processNumber.ParseSucceeded){$Parsed['CpuPercent']=$processNumber.ParsedValue;$Parsed['ProcessCpuPercent']=$processNumber.ParsedValue}; if($systemNumber.ParseSucceeded){$Parsed['WemReportedSystemCpuPercent']=$systemNumber.ParsedValue}; $Parsed['CpuValuesMatched']=($processNumber.ParseSucceeded -and $systemNumber.ParseSucceeded) }
+                    $patterns=@{ ProcessName='(?i)(?:process(?:\s*name)?|application|image)\s*[:=]\s*["'']?([^"'',;\r\n]+)'; ProcessId='(?i)\b(?:pid|process\s*id)\s*[:=]\s*(\d+)'; UserName='(?i)\b(?:user(?:name)?|account)\s*[:=]\s*([^,;\r\n\.]+)'; SessionId='(?i)\bsession(?:\s*id)?\s*[:=]\s*(\d+)'; OldPriority='(?i)\b(?:old|original|previous)\s*priority\s*[:=]\s*([^,;\r\n]+)'; NewPriority='(?i)\b(?:new|target)\s*priority\s*[:=]\s*([^,;\r\n]+)' }
+                    foreach($key in $patterns.Keys){ $m=[regex]::Match($Message,$patterns[$key]); if($m.Success){ SetIfEmpty $Parsed $key $m.Groups[1].Value.Trim() } }
+                    if(-not $Parsed.ContainsKey('CpuPercent')){ $m=[regex]::Match($Message,'(?i)\bprocess\s*cpu\s*[:=]\s*(-?[0-9]+(?:[\.,][0-9]+)?)\s*%?'); if($m.Success){$n=Convert-WemNumber $m.Groups[1].Value;$Parsed['ProcessCpuRaw']=$n.OriginalValue;if($n.ParseSucceeded){$Parsed['CpuPercent']=$n.ParsedValue;$Parsed['ProcessCpuPercent']=$n.ParsedValue}} }
+                    if(-not $Parsed.ContainsKey('WemReportedSystemCpuPercent')){ $m=[regex]::Match($Message,'(?i)\bsystem\s*cpu\s*[:=]\s*(-?[0-9]+(?:[\.,][0-9]+)?)\s*%?'); if($m.Success){$n=Convert-WemNumber $m.Groups[1].Value;$Parsed['WemReportedSystemCpuRaw']=$n.OriginalValue;if($n.ParseSucceeded){$Parsed['WemReportedSystemCpuPercent']=$n.ParsedValue}} }
                 }
                 function Parse-WemEvent($Event){
                     $xmlText=''; $parseError=''; $named=@{}; $unnamed=@(); $parsed=@{}; $parseMethod='Failed'
@@ -1550,15 +1734,17 @@ function Invoke-WemCpuSpikeProtectionEventCollection {
                         if($parseMethod -eq 'Failed' -and $parsed.Keys.Count -gt 0){ $parseMethod='UnnamedXmlData' }
                     }
                     $before=$parsed.Keys.Count; Parse-WemMessage -Message ([string]$Event.Message) -Parsed $parsed
+                    foreach($cpuKey in @('CpuPercent','WemReportedSystemCpuPercent')){ if($parsed.ContainsKey($cpuKey) -and $parsed[$cpuKey] -isnot [double]){ $number=Convert-WemNumber ([string]$parsed[$cpuKey]); if($number.ParseSucceeded){ if($cpuKey -eq 'CpuPercent'){SetIfEmpty $parsed 'ProcessCpuRaw' $number.OriginalValue; $parsed['ProcessCpuPercent']=$number.ParsedValue}; if($cpuKey -eq 'WemReportedSystemCpuPercent'){SetIfEmpty $parsed 'WemReportedSystemCpuRaw' $number.OriginalValue}; $parsed[$cpuKey]=$number.ParsedValue } } }
                     if($parseMethod -eq 'Failed' -and $parsed.Keys.Count -gt $before){ $parseMethod='MessageRegex' }
                     elseif($parseMethod -eq 'Failed' -and $parsed.Keys.Count -gt 0){ $parseMethod='Partial' }
                     $action = switch ([int]$Event.Id) { 7001 { 'SpikeProtectionInitialized' } 7002 { 'SpikeProtectionInitialized' } 7003 { 'PriorityChanged' } 7004 { 'PriorityChangeFailed' } default { 'Other' } }
                     $pn=FirstValue $parsed @('ProcessName'); $pidVal=FirstValue $parsed @('ProcessId')
                     $centralFound = @($pn,$pidVal,(FirstValue $parsed @('UserName')),(FirstValue $parsed @('CpuPercent')) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }).Count
                     $succeeded = (-not [string]::IsNullOrWhiteSpace($pn) -and -not [string]::IsNullOrWhiteSpace($pidVal) -and -not [string]::IsNullOrWhiteSpace((FirstValue $parsed @('UserName'))) -and -not [string]::IsNullOrWhiteSpace((FirstValue $parsed @('CpuPercent'))))
+                    if($succeeded -and $parsed.ContainsKey('MessageIdentityMatched')){ $parseMethod='MessageRegex' }
                     if(-not $succeeded -and $centralFound -gt 0){ $parseMethod='Partial' }
                     if(-not $succeeded -and [string]::IsNullOrWhiteSpace($parseError)){ if($centralFound -gt 0){ $parseError='WEM-Ereignis nur teilweise strukturiert erkannt.' } else { $parseError='Keine strukturierten Prozessdaten im WEM-Ereignis erkannt.' } }
-                    [pscustomobject]@{ RunId=$RunId; Server=$env:COMPUTERNAME; TimeCreated=$Event.TimeCreated.ToString('s'); EventId=$Event.Id; RecordId=$Event.RecordId; LogName=$Event.LogName; ProviderName=$Event.ProviderName; Level=$Event.LevelDisplayName; ProcessName=$pn; ProcessId=$pidVal; UserName=(FirstValue $parsed @('UserName')); SessionId=(FirstValue $parsed @('SessionId')); CpuPercent=(FirstValue $parsed @('CpuPercent')); WemReportedSystemCpuPercent=(FirstValue $parsed @('WemReportedSystemCpuPercent')); OldPriority=(FirstValue $parsed @('OldPriority')); NewPriority=(FirstValue $parsed @('NewPriority')); Action=$action; Success=([int]$Event.Id -ne 7004); Message=$Event.Message; RawEventXml=$xmlText; ParseError=$parseError; QueryError=''; ParseSucceeded=$succeeded; ParseMethod=$parseMethod; OriginalProcessName=$pn; NormalizedProcessName=(Normalize-ProcessNameLocal $pn) }
+                    [pscustomobject]@{ RunId=$RunId; Server=$env:COMPUTERNAME; TimeCreated=$Event.TimeCreated.ToString('s'); EventId=$Event.Id; RecordId=$Event.RecordId; LogName=$Event.LogName; ProviderName=$Event.ProviderName; Level=$Event.LevelDisplayName; ProcessName=$pn; ProcessId=$pidVal; UserName=(FirstValue $parsed @('UserName')); SessionId=(FirstValue $parsed @('SessionId')); CpuPercent=(FirstValue $parsed @('CpuPercent')); WemReportedSystemCpuPercent=(FirstValue $parsed @('WemReportedSystemCpuPercent')); OldPriority=(FirstValue $parsed @('OldPriority')); NewPriority=(FirstValue $parsed @('NewPriority')); Action=$action; Success=([int]$Event.Id -ne 7004); Message=$Event.Message; RawEventXml=$xmlText; ParseError=$parseError; QueryError=''; ParseSucceeded=$succeeded; ParseMethod=$parseMethod; OriginalProcessName=$pn; NormalizedProcessName=(Normalize-ProcessNameLocal $pn); ProcessCpuRaw=(FirstValue $parsed @('ProcessCpuRaw')); ProcessCpuPercent=(FirstValue $parsed @('ProcessCpuPercent','CpuPercent')); WemReportedSystemCpuRaw=(FirstValue $parsed @('WemReportedSystemCpuRaw')); WemCpuValueSemantics='PerCoreSum'; WemCpuIsNormalizedServerPercent=$false; Matched=$false; MatchedProcessSampleId=''; CorrelationMethod='NotMatched'; CorrelationConfidence='None'; SecondsToMatchedSample=''; CorrelationError='' }
                 }
                 $eventRows=@(); $diagRows=@(); $eventIds=@(7001,7002,7003,7004); $known=@('WEM Agent Service','Citrix WEM Agent Service','Norskale Agent Service')
                 $available=@(); try { $available=@(Get-WinEvent -ListLog '*WEM*' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LogName) } catch { $available=@() }
@@ -1611,20 +1797,14 @@ function Add-WemCorrelationToProcessRows {
                     $startMatches = @($pidMatches | Where-Object { try { [datetime](Get-SafePropertyValue -Object $_ -PropertyName 'TimeCreated' -DefaultValue '') -ge $sampleStart } catch { $false } } | Sort-Object TimeCreated)
                     if ($startMatches) { $match=@($startMatches | Select-Object -Last 1)[0]; $method='ServerPidStartTime'; $confidence='High' }
                 }
-                if (-not $match -and $pidMatches) { $match=@($pidMatches | Sort-Object TimeCreated | Select-Object -Last 1)[0]; $method='ServerPidTimeWindow'; $confidence='High' }
-            }
-            if (-not $match -and $sampleName) {
-                $nameCandidates = @($candidates | Where-Object { [string](Get-SafePropertyValue -Object $_ -PropertyName 'NormalizedProcessName' -DefaultValue '') -eq $sampleName })
-                $noPidConflict = @($nameCandidates | Where-Object { $eventPid=[string](Get-SafePropertyValue -Object $_ -PropertyName 'ProcessId' -DefaultValue ''); [string]::IsNullOrWhiteSpace($eventPid) -or [string]::IsNullOrWhiteSpace($sampleProcessId) -or $eventPid -eq $sampleProcessId })
-                $sessionMatches = @($noPidConflict | Where-Object { $sid=[string](Get-SafePropertyValue -Object $_ -PropertyName 'SessionId' -DefaultValue ''); -not [string]::IsNullOrWhiteSpace($sid) -and $sid -eq $sampleSessionId } | Sort-Object TimeCreated)
-                if ($sessionMatches) { $match=@($sessionMatches | Select-Object -Last 1)[0]; $method='ServerSessionProcessName'; $confidence='Medium' }
-                elseif ($noPidConflict) { $match=@($noPidConflict | Sort-Object TimeCreated | Select-Object -Last 1)[0]; $method='ServerProcessNameOnly'; $confidence='Low' }
+                if (-not $match -and $pidMatches) {
+                    $sessionMatches = @($pidMatches | Where-Object { $sampleSessionId -and [string](Get-SafePropertyValue -Object $_ -PropertyName 'SessionId' -DefaultValue '') -eq $sampleSessionId } | Sort-Object TimeCreated)
+                    if ($sessionMatches) { $match=@($sessionMatches | Select-Object -Last 1)[0]; $method='ServerPidSessionTimestamp'; $confidence='High' }
+                    else { $match=@($pidMatches | Sort-Object TimeCreated | Select-Object -Last 1)[0]; $method='ServerPidNearestTimestamp'; $confidence='Medium' }
+                }
             }
             if ($match) {
-                $matchedEvents = @($candidates | Where-Object {
-                    $same = ([string](Get-SafePropertyValue -Object $_ -PropertyName 'ProcessId' -DefaultValue '') -eq $sampleProcessId -and $sampleProcessId) -or ([string](Get-SafePropertyValue -Object $_ -PropertyName 'NormalizedProcessName' -DefaultValue '') -eq $sampleName -and $sampleName)
-                    $same
-                })
+                $matchedEvents = @($candidates | Where-Object { $sampleProcessId -and [string](Get-SafePropertyValue -Object $_ -PropertyName 'ProcessId' -DefaultValue '') -eq $sampleProcessId })
                 Add-OrUpdateNoteProperty -InputObject $p -Name 'WemSpikeTriggered' -Value (@($matchedEvents | Where-Object { [int](Get-SafePropertyValue -Object $_ -PropertyName 'EventId' -DefaultValue 0) -in @(7001,7002) }).Count -gt 0)
                 Add-OrUpdateNoteProperty -InputObject $p -Name 'WemPriorityChanged' -Value (@($matchedEvents | Where-Object { [int](Get-SafePropertyValue -Object $_ -PropertyName 'EventId' -DefaultValue 0) -eq 7003 }).Count -gt 0)
                 Add-OrUpdateNoteProperty -InputObject $p -Name 'WemNewPriority' -Value (Get-SafePropertyValue -Object $match -PropertyName 'NewPriority' -DefaultValue '')
@@ -1642,6 +1822,9 @@ function Add-WemCorrelationToProcessRows {
                 Add-OrUpdateNoteProperty -InputObject $match -Name 'MatchedIsUserProcess' -Value ([bool](Get-SafePropertyValue -Object $p -PropertyName 'IsUserProcess' -DefaultValue $false))
                 Add-OrUpdateNoteProperty -InputObject $match -Name 'MatchedIsSystemProcess' -Value ([bool](Get-SafePropertyValue -Object $p -PropertyName 'IsSystemProcess' -DefaultValue $false))
                 Add-OrUpdateNoteProperty -InputObject $match -Name 'MatchedCategory' -Value ([string](Get-SafePropertyValue -Object $p -PropertyName 'Category' -DefaultValue ''))
+                Add-OrUpdateNoteProperty -InputObject $match -Name 'MatchedProcessSampleId' -Value ('{0}|{1}|{2}' -f $server,$sampleProcessId,$sampleTime.ToString('o'))
+                Add-OrUpdateNoteProperty -InputObject $match -Name 'SecondsToMatchedSample' -Value ([Math]::Round([Math]::Abs(($sampleTime - [datetime](Get-SafePropertyValue -Object $match -PropertyName 'TimeCreated' -DefaultValue $sampleTime)).TotalSeconds),1))
+                Add-OrUpdateNoteProperty -InputObject $match -Name 'CorrelationError' -Value ''
             }
         } catch { Write-RunLog -Path $runLogFile -Level 'WARN' -Message ("WEM Prozesskorrelation fehlgeschlagen: Server={0}; PID={1}; Type={2}; Properties={3}; Error={4}; Stack={5}" -f (Get-SafePropertyValue -Object $p -PropertyName 'Server' -DefaultValue ''), (Get-SafePropertyValue -Object $p -PropertyName 'ProcessId' -DefaultValue ''), $p.GetType().FullName, (($p.PSObject.Properties.Name) -join ','), $_.Exception.Message, $_.ScriptStackTrace) }
     }
@@ -1716,7 +1899,12 @@ $logPath = Join-Path $OutputPath 'logs'
 Ensure-Directory $rawPath; Ensure-Directory $summaryPath; Ensure-Directory $logPath
 
 $runStart = Get-Date
-if ([string]::IsNullOrWhiteSpace($settings.RunId)) { $runId = '{0}_{1}' -f $runStart.ToString('yyyyMMdd_HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0,8)) } else { $runId = $settings.RunId }
+$runIdentity = Resolve-UniqueRunIdentity -RequestedRunId $settings.RunId -OutputPath $OutputPath -StartTime $runStart
+$script:RequestedRunId = [string]$runIdentity.RequestedRunId
+$script:EffectiveRunId = [string]$runIdentity.EffectiveRunId
+$script:RunInstanceId = [string]$runIdentity.RunInstanceId
+$runId = $script:EffectiveRunId
+$settings.RunId = $runId
 $runsPath = Join-Path $OutputPath 'runs'
 Ensure-Directory $runsPath
 $runOutputPath = Join-Path $runsPath $runId
@@ -1730,6 +1918,7 @@ $wemEventContextOutputPath = Join-Path $rawPath "WemEventContext_$runId.csv"
 $wemEventContextRunOutputPath = Join-Path $runOutputPath 'WemEventContext.csv'
 $allServerRows = @()
 $allProcessRows = @()
+$eventContextTriggers = @()
 $defenderJobs = @()
 $wemJobs = @()
 $defenderLastTriggerByServer = @{}
@@ -1754,6 +1943,8 @@ $endReason = 'Completed'
 $runError = $null
 
 try {
+    Write-RunLog -Path $runLogFile -Message ("Run Identity: RequestedRunId={0}, EffectiveRunId={1}, RunInstanceId={2}, RunStartTime={3}, RunStartTimeUtc={4}, RunIdCollisionDetected={5}, RunIdCollisionResolution={6}" -f $script:RequestedRunId, $script:EffectiveRunId, $script:RunInstanceId, $runIdentity.RunStartTime.ToString('o'), $runIdentity.RunStartTimeUtc.ToString('o'), $runIdentity.RunIdCollisionDetected, $runIdentity.RunIdCollisionResolution)
+    Write-RunLog -Path $runLogFile -Message ("Export Metadata: ScriptVersion={0}, OutputSchemaVersion={1}" -f $script:ScriptVersion, $script:OutputSchemaVersion)
     Write-RunLog -Path $runLogFile -Message "Run gestartet. Server=$($servers.Count), DurationMinutes=$($settings.DurationMinutes), IntervalSeconds=$($settings.IntervalSeconds), MaxParallel=$($settings.MaxParallel), StartTime=$($runStart.ToString('s')), HardEndTime=$($hardEndTime.ToString('s')), MaxRounds=$maxRounds, DefenderPerfLocalRoot=$($settings.DefenderPerfLocalRoot), DefenderPerfTriggerServerCpuPercent=$($settings.DefenderPerfTriggerServerCpuPercent), DefenderPerfRecordingSeconds=$($settings.DefenderPerfRecordingSeconds), DefenderPerfCooldownMinutes=$($settings.DefenderPerfCooldownMinutes), MaxConcurrentDefenderPerfRecordings=$($settings.MaxConcurrentDefenderPerfRecordings), DefenderPerfFinalWaitSeconds=$($settings.DefenderPerfFinalWaitSeconds), FinalizationTimeoutSeconds=$($settings.FinalizationTimeoutSeconds), WemTriggerServerCpuPercent=$($settings.WemTriggerServerCpuPercent), WemEventWindowMinutes=$($settings.WemEventWindowMinutes), IncludeEventlogContext=$($settings.IncludeEventLogContext), IncludeWemCpuSpikeProtectionEvents=$($settings.IncludeWemCpuSpikeProtectionEvents), WemPriorityLoweringSeconds=$($settings.WemPriorityLoweringSeconds), HealthCheckAccountName=$healthCheckAccountName"
     if ($settings.IncludeScheduledTaskInventory) {
         Write-RunLog -Path $runLogFile -Message 'ScheduledTaskInventory gestartet.'
@@ -1776,7 +1967,7 @@ try {
     $hardEndTime = $measurementStartTime.AddMinutes($plannedDurationMinutes)
     Write-RunLog -Path $runLogFile -Message "MeasurementStartTime=$($measurementStartTime.ToString('s')), HardEndTime=$($hardEndTime.ToString('s')), MaxRounds=$maxRounds"
     Write-EffectiveConfiguration -Settings $settings -RunLogFile $runLogFile -HardEndTime $hardEndTime -MaxRounds $maxRounds
-    if ($settings.IncludeEventLogContext) { Export-EmptyCsv -Path $eventContextOutputPath -Columns @('RunId','Timestamp','Server','TargetServer','ComputerName','LogName','EventTime','EventId','ProviderName','Level','Message') -Delimiter $settings.OutputDelimiter; Export-EmptyCsv -Path (Join-Path $runOutputPath 'EventContext.csv') -Columns @('RunId','Timestamp','Server','TargetServer','ComputerName','LogName','EventTime','EventId','ProviderName','Level','Message') -Delimiter $settings.OutputDelimiter }
+    if ($settings.IncludeEventLogContext) { Export-EmptyCsv -Path $eventContextOutputPath -Columns @('RunId','Timestamp','Server','TargetServer','ComputerName','LogName','EventTime','EventId','RecordId','ProviderName','Level','Message','DuplicateCount','DeduplicationKeyType','DeduplicationKey') -Delimiter $settings.OutputDelimiter; Export-EmptyCsv -Path (Join-Path $runOutputPath 'EventContext.csv') -Columns @('RunId','Timestamp','Server','TargetServer','ComputerName','LogName','EventTime','EventId','RecordId','ProviderName','Level','Message','DuplicateCount','DeduplicationKeyType','DeduplicationKey') -Delimiter $settings.OutputDelimiter }
     if ($settings.IncludeWemCpuSpikeProtectionEvents) { Export-EmptyCsv -Path $wemCpuSpikeProtectionOutputPath -Columns (Get-WemCpuSpikeProtectionColumns) -Delimiter $settings.OutputDelimiter; Export-EmptyCsv -Path (Join-Path $runOutputPath 'WemCpuSpikeProtectionEvents.csv') -Columns (Get-WemCpuSpikeProtectionColumns) -Delimiter $settings.OutputDelimiter; Export-EmptyCsv -Path $wemCpuSpikeProtectionSummaryOutputPath -Columns (Get-WemCpuSpikeProtectionSummaryColumns) -Delimiter $settings.OutputDelimiter; Export-EmptyCsv -Path (Join-Path $runOutputPath 'WemCpuSpikeProtectionSummary.csv') -Columns (Get-WemCpuSpikeProtectionSummaryColumns) -Delimiter $settings.OutputDelimiter; Export-EmptyCsv -Path $wemCpuSpikeProtectionQueryDiagnosticsOutputPath -Columns (Get-WemCpuSpikeProtectionQueryDiagnosticsColumns) -Delimiter $settings.OutputDelimiter; Export-EmptyCsv -Path (Join-Path $runOutputPath 'WemCpuSpikeProtectionQueryDiagnostics.csv') -Columns (Get-WemCpuSpikeProtectionQueryDiagnosticsColumns) -Delimiter $settings.OutputDelimiter }
     while ($true) {
         $nextRound = $round + 1
@@ -1815,6 +2006,9 @@ try {
             $serverRows += $serverRow
 
             $sampleTime = [datetime]$serverSample.Timestamp
+            if ($settings.IncludeEventLogContext -and $serverSample.IsCpuWarning) {
+                $eventContextTriggers += [pscustomobject]@{ Server=$item.TargetServer; TriggerTimestamp=$sampleTime; TriggerType=$serverSample.AlertSeverity; RoundNumber=$round; ServerCpuPercent=$serverSample.CpuPercent }
+            }
             $msMpEng = @($item.Result.ProcessSamples | Where-Object { $_.ProcessName -eq 'MsMpEng' } | Sort-Object ProcessCpuServerPercent -Descending | Select-Object -First 1)
             if ($settings.AutoDefenderPerfRecording -and $msMpEng -and [double]$msMpEng.ProcessCpuServerPercent -ge [double]$settings.DefenderPerfTriggerServerCpuPercent) {
                 $remainingForDefenderSeconds = ($hardEndTime - (Get-Date)).TotalSeconds
@@ -1966,11 +2160,26 @@ finally {
             }
             Write-RunLog -Path $runLogFile -Message ("WEM CPU Spike Protection Events beendet. Rows={0}, QueryErrors={1}, ParseErrors={2}, DiagnosticsRows={3}" -f $eventRowsOnly.Count, @($wemSpikeQueryDiagnosticsRows | Where-Object { $_.Selected -and -not $_.QuerySucceeded }).Count, @($wemSpikeRows | Where-Object ParseError).Count, $wemSpikeQueryDiagnosticsRows.Count)
         }
-        $eventContextRowsForLog = @(Import-CsvIfExists -Path $eventContextOutputPath -Delimiter $settings.OutputDelimiter)
-        $eventContextTriggerCount = @($allServerRows | Where-Object { $_.IsCpuWarning -eq $true -or $_.IsCpuWarning -eq 'True' }).Count
-        $eventContextRowCount = @($eventContextRowsForLog | Where-Object { $_.EventId }).Count
-        $eventContextQueriesExecuted = if ($settings.IncludeEventLogContext) { $eventContextTriggerCount } else { 0 }
-        Write-RunLog -Path $runLogFile -Message ("EventContext: IncludeEventlogContext={0}, EventContextTriggerCount={1}, EventContextRows={2}, EventContextQueryErrors=0, EventContextOutputPath={3}, EventContextTriggersDetected={1}, EventContextQueriesExecuted={4}, EventContextQueriesSkippedByCooldown=0, EventContextWindowsMerged=0, EventContextRowsBeforeDeduplication={2}, EventContextRowsAfterDeduplication={2}, EventContextCooldownMinutes={5}" -f $settings.IncludeEventLogContext, $eventContextTriggerCount, $eventContextRowCount, $eventContextOutputPath, $eventContextQueriesExecuted, $settings.EventContextCooldownMinutes)
+        $eventContextTriggerCount = $eventContextTriggers.Count
+        $eventContextWindows = @(); $eventContextRawRows = @(); $eventContextRowsForLog = @(); $eventContextQueryErrors = @()
+        if ($settings.IncludeEventLogContext) {
+            $eventContextWindows = @(Merge-EventContextWindows -Triggers $eventContextTriggers -WindowMinutes 10 -CooldownMinutes ([int]$settings.EventContextCooldownMinutes))
+            $eventContextResult = Invoke-MergedEventContextCollection -Windows $eventContextWindows -RunId $runId -MaxEventsPerWindow ([int]$settings.MaxEventsPerAlert)
+            $eventContextRawRows = @($eventContextResult.Rows)
+            $eventContextQueryErrors = @($eventContextResult.Errors)
+            $eventContextRowsForLog = @(Get-DeduplicatedEventRows -Rows $eventContextRawRows)
+            if ($eventContextRowsForLog.Count -gt 0) {
+                Export-AtomicCsv -Rows $eventContextRowsForLog -Path $eventContextOutputPath -Delimiter $settings.OutputDelimiter
+                Export-AtomicCsv -Rows $eventContextRowsForLog -Path (Join-Path $runOutputPath 'EventContext.csv') -Delimiter $settings.OutputDelimiter
+            }
+            foreach($errorRow in $eventContextQueryErrors){ Write-RunLog -Path $runLogFile -Level 'WARN' -Message ("EventContext Queryfehler: Server={0}; LogName={1}; Error={2}" -f $errorRow.Server,$errorRow.LogName,$errorRow.ErrorMessage) }
+            if ($eventContextQueryErrors.Count -gt 0) { $postProcessingErrors += "EventContext query errors: $($eventContextQueryErrors.Count)" }
+        }
+        $eventContextRowCount = $eventContextRowsForLog.Count
+        $eventContextQueriesExecuted = @($eventContextWindows | Where-Object QueryExecuted).Count
+        $eventContextWindowsMerged = [Math]::Max(0,$eventContextTriggerCount-$eventContextWindows.Count)
+        $eventContextDuplicatesRemoved = [Math]::Max(0,$eventContextRawRows.Count-$eventContextRowsForLog.Count)
+        Write-RunLog -Path $runLogFile -Message ("EventContext: IncludeEventlogContext={0}, EventContextTriggerCount={1}, EventContextRows={2}, EventContextQueryErrors={3}, EventContextOutputPath={4}, EventContextTriggersDetected={1}, EventContextWindowsCreated={5}, EventContextQueriesExecuted={6}, EventContextQueriesSkippedByCooldown={7}, EventContextWindowsMerged={8}, EventContextRowsBeforeDeduplication={9}, EventContextRowsAfterDeduplication={2}, EventContextDuplicatesRemoved={10}, EventContextCooldownMinutes={11}" -f $settings.IncludeEventLogContext,$eventContextTriggerCount,$eventContextRowCount,$eventContextQueryErrors.Count,$eventContextOutputPath,$eventContextWindows.Count,$eventContextQueriesExecuted,$eventContextWindowsMerged,$eventContextWindowsMerged,$eventContextRawRows.Count,$eventContextDuplicatesRemoved,$settings.EventContextCooldownMinutes)
         $wemSpikeEventRows = @($wemSpikeRows | Where-Object { $_.EventId })
         $wemSpikeEventTotal = $wemSpikeEventRows.Count
         $wemSpike7001Count = @($wemSpikeEventRows | Where-Object { [int]$_.EventId -eq 7001 }).Count
@@ -2004,6 +2213,11 @@ finally {
             }
         }
         $wemEventRows = @(Import-CsvIfExists -Path $wemEventContextOutputPath -Delimiter $settings.OutputDelimiter)
+        if ($wemEventRows.Count -gt 0) {
+            $wemEventRows = @(Get-DeduplicatedEventRows -Rows $wemEventRows)
+            Export-AtomicCsv -Rows $wemEventRows -Path $wemEventContextOutputPath -Delimiter $settings.OutputDelimiter
+            Export-AtomicCsv -Rows $wemEventRows -Path $wemEventContextRunOutputPath -Delimiter $settings.OutputDelimiter
+        }
         $wemEventContextRowsCount = @($wemEventRows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.EventId) }).Count
         $wemEventContextOutputCreated = Test-Path -LiteralPath $wemEventContextOutputPath
         $wemEventContextHeaderOnly = ([bool]$wemEventContextOutputCreated -and $wemEventContextRowsCount -eq 0)
@@ -2028,6 +2242,14 @@ finally {
         $preSummaryManifestRows = @(New-OutputFileManifestRows -Settings $settings -RunId $runId -RawPath $rawPath -SummaryPath $summaryPath -LogPath $logPath -RunOutputPath $runOutputPath -Delimiter $settings.OutputDelimiter -DefenderRecordingsStarted $defenderStartedCount | Where-Object { $_.LogicalName -notin @('RunSummary','RunSummaryText') })
         $statusInfo = New-RunStatusInfo -MeasurementErrorCount $measurementErrorCountValue -PostProcessingErrors $postProcessingErrors -ManifestRows $preSummaryManifestRows
         foreach ($summaryRow in $runSummaryRows) {
+            $summaryRow | Add-Member -MemberType NoteProperty -Name RequestedRunId -Value $script:RequestedRunId -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EffectiveRunId -Value $script:EffectiveRunId -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name RunInstanceId -Value $script:RunInstanceId -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name RunStartTimeUtc -Value $runIdentity.RunStartTimeUtc.ToString('o') -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name RunIdCollisionDetected -Value $runIdentity.RunIdCollisionDetected -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name RunIdCollisionResolution -Value $runIdentity.RunIdCollisionResolution -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name ScriptVersion -Value $script:ScriptVersion -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name OutputSchemaVersion -Value $script:OutputSchemaVersion -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name DefenderPerfRecordingTriggered -Value $defenderTriggered -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextTriggered -Value $wemTriggered -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextEnabled -Value ([bool]$settings.IncludeWemEventContext) -Force
@@ -2039,6 +2261,14 @@ finally {
             $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextHeaderOnly -Value $wemEventContextHeaderOnly -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextOutputPath -Value $wemEventContextOutputPath -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name WemEventContextOutputError -Value $wemEventContextOutputError -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EventContextTriggersDetected -Value $eventContextTriggerCount -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EventContextWindowsCreated -Value $eventContextWindows.Count -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EventContextWindowsMerged -Value $eventContextWindowsMerged -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EventContextQueriesExecuted -Value $eventContextQueriesExecuted -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EventContextQueriesSkippedByCooldown -Value $eventContextWindowsMerged -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EventContextRowsBeforeDeduplication -Value $eventContextRawRows.Count -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EventContextRowsAfterDeduplication -Value $eventContextRowsForLog.Count -Force
+            $summaryRow | Add-Member -MemberType NoteProperty -Name EventContextDuplicatesRemoved -Value $eventContextDuplicatesRemoved -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name HealthCheckAccountName -Value $healthCheckAccountName -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name DefenderRecordingAverageStartDelaySeconds -Value $defenderAverageDelay -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name DefenderRecordingMaximumStartDelaySeconds -Value $defenderMaximumDelay -Force
@@ -2074,10 +2304,6 @@ finally {
         }
         $summaryCsv = Join-Path $summaryPath "RunSummary_$runId.csv"
         $summaryTxt = Join-Path $summaryPath "RunSummary_$runId.txt"
-        Export-Rows -Rows $runSummaryRows -Path $summaryCsv -Delimiter $settings.OutputDelimiter
-        Export-Rows -Rows $runSummaryRows -Path (Join-Path $runOutputPath 'RunSummary.csv') -Delimiter $settings.OutputDelimiter
-        New-RunSummaryText -SummaryRows $runSummaryRows -Start $runStart -End $runEnd | Set-Content -LiteralPath $summaryTxt -Encoding UTF8
-        New-RunSummaryText -SummaryRows $runSummaryRows -Start $runStart -End $runEnd | Set-Content -LiteralPath (Join-Path $runOutputPath 'RunSummary.txt') -Encoding UTF8
         $manifestRows = @(New-OutputFileManifestRows -Settings $settings -RunId $runId -RawPath $rawPath -SummaryPath $summaryPath -LogPath $logPath -RunOutputPath $runOutputPath -Delimiter $settings.OutputDelimiter -DefenderRecordingsStarted $defenderStartedCount)
         $manifestTempPath = "$manifestPath.tmp"
         $manifestRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $manifestTempPath -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
@@ -2086,7 +2312,7 @@ finally {
         $manifestRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $manifestTempPath -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
         Move-Item -LiteralPath $manifestTempPath -Destination $manifestPath -Force
         $manifestRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $runManifestPath -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
-        $statusInfo = New-RunStatusInfo -MeasurementErrorCount $measurementErrorCountValue -PostProcessingErrors $postProcessingErrors -ManifestRows $manifestRows
+        $statusInfo = New-RunStatusInfo -MeasurementErrorCount $measurementErrorCountValue -PostProcessingErrors $postProcessingErrors -ManifestRows @($manifestRows | Where-Object { $_.LogicalName -notin @('RunSummary','RunSummaryText') })
         $createdList = @($manifestRows | Where-Object { Get-BooleanValue (Get-SafePropertyValue -Object $_ -PropertyName 'ExistsAfterWrite' -DefaultValue $false) } | ForEach-Object { $_.LogicalName })
         $expectedList = @($manifestRows | Where-Object { Get-BooleanValue (Get-SafePropertyValue -Object $_ -PropertyName 'Expected' -DefaultValue $false) } | ForEach-Object { $_.LogicalName })
         $failedList = @($manifestRows | Where-Object { (Get-BooleanValue (Get-SafePropertyValue -Object $_ -PropertyName 'Expected' -DefaultValue $false)) -and -not (Get-BooleanValue (Get-SafePropertyValue -Object $_ -PropertyName 'ExistsAfterWrite' -DefaultValue $false)) } | ForEach-Object { $_.LogicalName })
@@ -2103,17 +2329,40 @@ finally {
             $summaryRow | Add-Member -MemberType NoteProperty -Name OutputFilesExpected -Value ($expectedList -join ',') -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name OutputFilesCreated -Value ($createdList -join ',') -Force
             $summaryRow | Add-Member -MemberType NoteProperty -Name OutputFilesFailed -Value ($failedList -join ',') -Force
+            $schemaColumns = @($summaryRow.PSObject.Properties.Name | Where-Object { $_ -ne 'ExportSchemaHash' })
+            $summaryRow | Add-Member -MemberType NoteProperty -Name ExportSchemaHash -Value (Get-ExportSchemaHash $schemaColumns) -Force
         }
-        $runSummaryRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath $summaryCsv -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
-        $runSummaryRows | ConvertTo-InvariantObject | Export-Csv -LiteralPath (Join-Path $runOutputPath 'RunSummary.csv') -Delimiter $settings.OutputDelimiter -NoTypeInformation -Encoding UTF8
-        New-RunSummaryText -SummaryRows $runSummaryRows -Start $runStart -End $runEnd | Set-Content -LiteralPath $summaryTxt -Encoding UTF8
-        New-RunSummaryText -SummaryRows $runSummaryRows -Start $runStart -End $runEnd | Set-Content -LiteralPath (Join-Path $runOutputPath 'RunSummary.txt') -Encoding UTF8
+        Export-AtomicCsv -Rows $runSummaryRows -Path $summaryCsv -Delimiter $settings.OutputDelimiter
+        Export-AtomicCsv -Rows $runSummaryRows -Path (Join-Path $runOutputPath 'RunSummary.csv') -Delimiter $settings.OutputDelimiter
+        Write-AtomicText -Path $summaryTxt -Content (New-RunSummaryText -SummaryRows $runSummaryRows -Start $runStart -End $runEnd)
+        Write-AtomicText -Path (Join-Path $runOutputPath 'RunSummary.txt') -Content (New-RunSummaryText -SummaryRows $runSummaryRows -Start $runStart -End $runEnd)
+        # Nach dem Summary-Export das Manifest neu vermessen; erst diese Sicht bestimmt Status und Exitcode.
+        $manifestRows = @(New-OutputFileManifestRows -Settings $settings -RunId $runId -RawPath $rawPath -SummaryPath $summaryPath -LogPath $logPath -RunOutputPath $runOutputPath -Delimiter $settings.OutputDelimiter -DefenderRecordingsStarted $defenderStartedCount)
+        $manifestRows += New-OutputManifestRow -LogicalName 'OutputFileManifest' -Expected $true -Enabled $true -Path $manifestPath -Delimiter $settings.OutputDelimiter -WriteSucceededOverride $true
+        Export-AtomicCsv -Rows $manifestRows -Path $manifestPath -Delimiter $settings.OutputDelimiter
+        Export-AtomicCsv -Rows $manifestRows -Path $runManifestPath -Delimiter $settings.OutputDelimiter
+        $statusInfo = New-RunStatusInfo -MeasurementErrorCount $measurementErrorCountValue -PostProcessingErrors $postProcessingErrors -ManifestRows $manifestRows
+        $createdList = @($manifestRows | Where-Object { Get-BooleanValue (Get-SafePropertyValue $_ 'ExistsAfterWrite' $false) } | ForEach-Object LogicalName)
+        $expectedList = @($manifestRows | Where-Object { Get-BooleanValue (Get-SafePropertyValue $_ 'Expected' $false) } | ForEach-Object LogicalName)
+        $failedList = @($manifestRows | Where-Object { (Get-BooleanValue (Get-SafePropertyValue $_ 'Expected' $false)) -and -not (Get-BooleanValue (Get-SafePropertyValue $_ 'ExistsAfterWrite' $false)) } | ForEach-Object LogicalName)
+        foreach($summaryRow in $runSummaryRows){
+            foreach($pair in @{
+                RunStatus=$statusInfo.RunStatus;MeasurementStatus=$statusInfo.MeasurementStatus;PostProcessingStatus=$statusInfo.PostProcessingStatus;MeasurementErrorCount=$statusInfo.MeasurementErrorCount;PostProcessingErrorCount=$statusInfo.PostProcessingErrorCount;PostProcessingErrors=$statusInfo.PostProcessingErrors;
+                OutputFilesExpectedCount=$expectedList.Count;OutputFilesCreatedCount=$createdList.Count;OutputFilesFailedCount=$failedList.Count;OutputFilesExpected=($expectedList -join ',');OutputFilesCreated=($createdList -join ',');OutputFilesFailed=($failedList -join ',')
+            }.GetEnumerator()){ Add-OrUpdateNoteProperty -InputObject $summaryRow -Name $pair.Key -Value $pair.Value }
+        }
+        Export-AtomicCsv -Rows $runSummaryRows -Path $summaryCsv -Delimiter $settings.OutputDelimiter
+        Export-AtomicCsv -Rows $runSummaryRows -Path (Join-Path $runOutputPath 'RunSummary.csv') -Delimiter $settings.OutputDelimiter
         $script:ExitCode = [int]$statusInfo.ExitCode
         Write-RunLog -Path $runLogFile -Message "RunSummary geschrieben: $summaryCsv; RunStatus=$($statusInfo.RunStatus); ExitCode=$script:ExitCode"
         $runSummaryRows
     }
     catch {
         Write-RunLog -Path $runLogFile -Level 'ERROR' -Message "RunSummary konnte nicht geschrieben werden: $($_.Exception.Message)"
+        try {
+            $fallback = [ordered]@{ RunStatus='PartialSuccess'; MeasurementStatus=$(if($completedRounds -gt 0){'Success'}else{'Failed'}); PostProcessingStatus='PartialSuccess'; Error=$_.Exception.Message; StackTrace=$_.ScriptStackTrace; RequestedRunId=$script:RequestedRunId; EffectiveRunId=$script:EffectiveRunId; RunInstanceId=$script:RunInstanceId; StartTime=$runStart.ToString('o'); EndTime=(Get-Date).ToString('o'); CompletedRounds=$completedRounds; ServerErrorCount=@($allServerRows | Where-Object Status -eq 'ERROR').Count }
+            $fallback | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $summaryPath "RunSummary_${runId}_FAILED.json") -Encoding UTF8
+        } catch { }
         Write-Warning $_.Exception.Message
         if ($script:ExitCode -eq 0) { $script:ExitCode = 2 }
     }

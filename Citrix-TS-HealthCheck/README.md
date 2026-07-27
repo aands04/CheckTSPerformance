@@ -373,3 +373,42 @@ Die CPU-Bereinigung erfolgt pro Server-Sample: `HealthCheckCpuAtSample = Sum(Pro
 Am Laufende wird `OutputFileManifest_<RunId>.csv` erzeugt. Es enthaelt fuer jede erwartete oder optionale Ausgabedatei LogicalName, Aktivierung, Pfad, Existenz, RowCount, Dateigroesse und Schreibstatus. Der Manifest-Eintrag fuer das Manifest selbst wird erst nach einem erfolgreichen temporären Schreibvorgang als erstellt bewertet, damit das Manifest nicht seinen eigenen Status faelschlich verschlechtert. RunSummary enthaelt daraus `OutputFilesExpectedCount`, `OutputFilesCreatedCount`, `OutputFilesFailedCount`, `OutputFilesExpected`, `OutputFilesCreated`, `OutputFilesFailed` und `OutputFileManifestPath`.
 
 Bei aktivierter WEM-EventContext-Funktion erzeugt der Collector `WemEventContext_<RunId>.csv` immer mit stabilem Header. Ein Lauf ohne WEM-Trigger oder ohne passende WEM-Ereignisse ist ein erfolgreiches Nullergebnis: die Datei existiert header-only, `RowCount=0`, der Manifest-Eintrag bleibt erfolgreich und `RunStatus`/`ExitCode` werden dadurch nicht verschlechtert. Nur echte Export- oder Queryfehler werden als Nachverarbeitungsfehler bewertet.
+
+## Sichere Run-Identitaet und Exporte
+
+Jeder Aufruf besitzt drei getrennte Kennungen: `RequestedRunId` ist der optionale,
+lesbare Name aus CLI/GUI, `EffectiveRunId` ist der tatsaechlich fuer alle Pfade
+verwendete, zeitgestempelte Name und `RunInstanceId` ist eine GUID. Ohne `-RunId`
+wird `CitrixTSHealthCheck_yyyyMMdd_HHmmss` verwendet. Bei einer Kollision wird
+automatisch `_01`, `_02` usw. angehaengt; bestehende Dateien werden weder
+ueberschrieben noch fuer einen neuen Lauf weiterverwendet.
+
+RunSummary und OutputFileManifest werden ueber temporaere Dateien atomar ersetzt.
+CSV-Exporte pruefen das Spaltenschema innerhalb der aktuellen Run-Instanz. Die
+RunSummary und das Manifest enthalten `ScriptVersion`, `OutputSchemaVersion` und
+`ExportSchemaHash`. Falls die RunSummary nicht geschrieben werden kann, wird eine
+`RunSummary_<EffectiveRunId>_FAILED.json` mit den wichtigsten Status- und
+Fehlerdaten angelegt.
+
+## WEM- und EventContext-Nachverarbeitung
+
+WEM-CPU-Werte werden lokalisiert gelesen (`de-DE`, InvariantCulture und ein
+expliziter Komma-Fallback). Werte wie `82,43 %`, `82.43 %` oder `399,69 %`
+bleiben dadurch numerisch und werden nicht auf 100 begrenzt. Rohwert,
+Prozesswert und der von WEM gemeldete Systemwert werden getrennt gespeichert;
+WEM-Werte sind als `PerCoreSum` und nicht als normalisierte Server-CPU markiert.
+
+Der allgemeine EventContext sammelt waehrend der Messung nur Trigger. In der
+Finalisierung werden ueberlappende bzw. innerhalb des Cooldowns angrenzende
+Fenster pro Server zusammengefuehrt und einmal abgefragt. Die Deduplizierung
+verwendet primaer `Server + LogName + RecordId`; ohne RecordId wird ein
+SHA-256-Fallback aus Server, Log, Provider, Event-ID, Zeit und Nachricht genutzt.
+`DuplicateCount`, `DeduplicationKeyType` und `DeduplicationKey` dokumentieren das
+Ergebnis. Dieselbe Deduplizierung wird auf den WEM-EventContext angewendet.
+
+Beispiel fuer einen taeglichen vierstuendigen Task (der Zeitstempel wird vom
+Collector automatisch an die EffectiveRunId angehaengt):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\Citrix-TS-HealthCheck\Invoke-CitrixTSHealthCheck.ps1" -ServerListPath "C:\Scripts\Citrix-TS-HealthCheck\config\servers.txt" -ConfigPath "C:\Scripts\Citrix-TS-HealthCheck\config\settings.json" -OutputPath "C:\Scripts\Citrix-TS-HealthCheck\output" -DurationMinutes 240 -IntervalSeconds 120 -RunId "DAILY_4H" -IncludeEventLogContext -IncludeWemEventContext -IncludeWemCpuSpikeProtectionEvents -AutoDefenderPerfRecording
+```
